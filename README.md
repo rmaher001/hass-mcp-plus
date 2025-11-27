@@ -31,6 +31,14 @@ Hass-MCP-Plus enables AI assistants like Claude to interact directly with your H
 
 ## Installation
 
+```bash
+# PyPI
+pip install hass-mcp-plus
+
+# Docker
+docker pull rmaher001/hass-mcp-plus:latest
+```
+
 ### Prerequisites
 
 - Home Assistant instance with Long-Lived Access Token
