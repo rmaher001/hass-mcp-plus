@@ -508,17 +508,24 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
     await _rate_limiter.acquire()
     client = await get_client()
     response = await client.post(
-        f"{HA_URL}/api/services/{domain}/{service}", 
+        f"{HA_URL}/api/services/{domain}/{service}",
         headers=get_ha_headers(),
         json=data
     )
     response.raise_for_status()
-    
+
     # Invalidate cache after service calls as they might change entity states
     global _entities_timestamp
     _entities_timestamp = 0
-    
-    return response.json()
+
+    result = response.json()
+
+    # Handle empty list responses from Home Assistant
+    # Some service calls return [] for successful operations with no data
+    if result == []:
+        result = {}
+
+    return result
 
 @handle_api_errors
 async def summarize_domain(domain: str, example_limit: int = 3) -> Dict[str, Any]:
