@@ -82,33 +82,63 @@ class TestHassAPI:
         domain = "light"
         service = "turn_on"
         data = {"entity_id": "light.living_room", "brightness": 255}
-        
+
         # Create mock response
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {"result": "ok"}
-        
+
         # Create properly awaitable mock
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        
+
         # Patch the client
         with patch('app.hass.get_client', return_value=mock_client):
             with patch('app.hass.HA_URL', mock_config["hass_url"]):
                 with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
                         # Test function
                         result = await call_service(domain, service, data)
-                        
+
                         # Assertions
                         assert isinstance(result, dict)
                         assert result["result"] == "ok"
-                        
+
                         # Verify API was called correctly
                         mock_client.post.assert_called_once()
                         called_url = mock_client.post.call_args[0][0]
                         called_data = mock_client.post.call_args[1].get('json')
                         assert called_url == f"{mock_config['hass_url']}/api/services/{domain}/{service}"
                         assert called_data == data
+
+    @pytest.mark.asyncio
+    async def test_call_service_empty_list_response(self, mock_config):
+        """Test calling a service that returns an empty list (should be converted to dict)."""
+        domain = "cast"
+        service = "show_lovelace_view"
+        data = {"entity_id": "media_player.cast_device", "view_path": "home"}
+
+        # Create mock response that returns empty list (as HA does for some service calls)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = []
+
+        # Create properly awaitable mock
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        # Patch the client
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                        # Test function
+                        result = await call_service(domain, service, data)
+
+                        # Assertions - empty list should be converted to empty dict
+                        assert isinstance(result, dict)
+                        assert result == {}
+
+                        # Verify API was called correctly
+                        mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_get_automations(self, mock_config):
