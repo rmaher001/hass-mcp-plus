@@ -141,6 +141,41 @@ class TestHassAPI:
                         mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_call_service_non_empty_list_response(self, mock_config):
+        """Test calling a service that returns a non-empty list (should be wrapped in dict)."""
+        domain = "script"
+        service = "deploy_automations"
+        data = {}
+
+        # Create mock response that returns non-empty list (as HA does for script/automation calls)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {"entity_id": "script.deploy_automations", "context": {"id": "abc123", "user_id": "user123"}}
+        ]
+
+        # Create properly awaitable mock
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        # Patch the client
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                        # Test function
+                        result = await call_service(domain, service, data)
+
+                        # Assertions - non-empty list should be wrapped in dict with "result" key
+                        assert isinstance(result, dict)
+                        assert "result" in result
+                        assert isinstance(result["result"], list)
+                        assert len(result["result"]) == 1
+                        assert result["result"][0]["entity_id"] == "script.deploy_automations"
+
+                        # Verify API was called correctly
+                        mock_client.post.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_get_automations(self, mock_config):
         """Test getting automations from the states API."""
         # Mock states response with automation entities

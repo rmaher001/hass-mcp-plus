@@ -520,10 +520,10 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
 
     result = response.json()
 
-    # Handle empty list responses from Home Assistant
-    # Some service calls return [] for successful operations with no data
-    if result == []:
-        result = {}
+    # Handle list responses from Home Assistant
+    # Service calls return lists (empty or with changed entity data)
+    if isinstance(result, list):
+        result = {"result": result} if result else {}
 
     return result
 
