@@ -724,7 +724,7 @@ async def list_automation_traces(
         if automation_id.startswith(f"{domain}."):
             automation_id = automation_id.split(".", 1)[1]
 
-        # Call trace/list WebSocket API with specific item_id
+        # Call trace/list WebSocket API with item_id filter
         traces = await call_websocket_api(
             "trace/list",
             domain=domain,
@@ -747,8 +747,9 @@ async def list_automation_traces(
             raw_traces = traces
 
         # Build lean trace summaries - only essential fields
+        # Traces are returned in chronological order (oldest first), so take last N for most recent
         lean_traces = []
-        for trace in raw_traces[:limit]:
+        for trace in raw_traces[-limit:]:
             lean_trace = {
                 "run_id": trace.get("run_id"),
                 "timestamp": trace.get("timestamp", {}).get("start"),
@@ -764,7 +765,7 @@ async def list_automation_traces(
             "automation_id": automation_id,
             "domain": domain,
             "traces": lean_traces,
-            "count": len(lean_traces)
+            "count": len(lean_traces),
         }
 
     except Exception as e:
