@@ -89,50 +89,51 @@ class TestMCPServer:
     async def test_list_automations_error_handling(self):
         """Test that list_automations handles errors properly."""
         from app.server import list_automations
-        
+
         # Mock the get_automations function with different scenarios
         with patch("app.server.get_automations") as mock_get_automations:
-            # Case 1: Test with 404 error response format (list with single dict with error key)
-            mock_get_automations.return_value = [{"error": "HTTP error: 404 - Not Found"}]
-            
-            # Should return an empty list
-            result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
-            
-            # Case 2: Test with dict error response
+            # Case 1: Test with dict error response
             mock_get_automations.return_value = {"error": "HTTP error: 404 - Not Found"}
-            
-            # Should return an empty list
+
+            # Should return a dict with empty automations list and error
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
-            
-            # Case 3: Test with unexpected error
+            assert isinstance(result, dict)
+            assert result["automations"] == []
+            assert "error" in result
+
+            # Case 2: Test with unexpected error (exception)
             mock_get_automations.side_effect = Exception("Unexpected error")
-            
-            # Should return an empty list and log the error
+
+            # Should return a dict with empty automations list and error
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 0
-            
-            # Case 4: Test with successful response
-            mock_automations = [
-                {
-                    "id": "morning_lights",
-                    "entity_id": "automation.morning_lights",
-                    "state": "on",
-                    "alias": "Turn on lights in the morning"
-                }
-            ]
+            assert isinstance(result, dict)
+            assert result["automations"] == []
+            assert "error" in result
+            assert "Unexpected error" in result["error"]
+
+            # Case 3: Test with successful response (new dict format)
+            mock_automations = {
+                "automations": [
+                    {
+                        "id": "morning_lights",
+                        "entity_id": "automation.morning_lights",
+                        "state": "on",
+                        "alias": "Turn on lights in the morning"
+                    }
+                ],
+                "count": 1,
+                "total_available": 1,
+                "truncated": False
+            }
             mock_get_automations.side_effect = None
             mock_get_automations.return_value = mock_automations
-            
-            # Should return the automations list
+
+            # Should return the automations dict
             result = await list_automations()
-            assert isinstance(result, list)
-            assert len(result) == 1
-            assert result[0]["id"] == "morning_lights"
+            assert isinstance(result, dict)
+            assert len(result["automations"]) == 1
+            assert result["automations"][0]["id"] == "morning_lights"
+            assert result["count"] == 1
             
     def test_tools_have_proper_docstrings(self):
         """Test that tool functions have proper docstrings"""

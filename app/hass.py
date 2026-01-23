@@ -715,20 +715,30 @@ async def restart_home_assistant() -> Dict[str, Any]:
     """Restart Home Assistant"""
     return await call_service("homeassistant", "restart", {})
 
-def _truncate_stacktrace(message: str, max_lines: int = DEFAULT_STACKTRACE_LINES) -> str:
+def _truncate_stacktrace(message: Union[str, List[str]], max_lines: int = DEFAULT_STACKTRACE_LINES) -> Union[str, List[str]]:
     """
     Truncate a stacktrace to a maximum number of lines.
 
     Args:
-        message: The log message potentially containing a stacktrace
+        message: The log message potentially containing a stacktrace (string or list of strings)
         max_lines: Maximum lines to keep from the stacktrace
 
     Returns:
-        Truncated message string
+        Truncated message in the same format as input (string or list)
     """
     if not message:
         return message
 
+    # Handle list input (Home Assistant system_log format)
+    if isinstance(message, list):
+        if len(message) <= max_lines:
+            return message
+        truncated = message[:max_lines]
+        remaining = len(message) - max_lines
+        truncated.append(f"... [{remaining} more lines truncated]")
+        return truncated
+
+    # Handle string input
     lines = message.split('\n')
     if len(lines) <= max_lines:
         return message

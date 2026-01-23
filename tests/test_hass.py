@@ -467,8 +467,10 @@ class TestContextFloodingPrevention:
         assert even[5]["value"] == 50
 
     def test_truncate_stacktrace(self):
-        """Test stacktrace truncation."""
+        """Test stacktrace truncation for both string and list input."""
         from app.hass import _truncate_stacktrace
+
+        # === STRING INPUT TESTS ===
 
         # Short message should not be truncated
         short = "Error: Something went wrong"
@@ -484,6 +486,30 @@ class TestContextFloodingPrevention:
         assert "Line 1" in lines[1]
         assert "Line 2" in lines[2]
         assert "17 more lines truncated" in lines[3]
+
+        # === LIST INPUT TESTS (Home Assistant system_log format) ===
+
+        # Short list should not be truncated
+        short_list = ["Line 1", "Line 2"]
+        assert _truncate_stacktrace(short_list, 3) == short_list
+
+        # Long list should be truncated
+        long_list = [f"Line {i}" for i in range(20)]
+        truncated_list = _truncate_stacktrace(long_list, 3)
+
+        assert isinstance(truncated_list, list)
+        assert len(truncated_list) == 4  # 3 lines + 1 truncation indicator
+        assert truncated_list[0] == "Line 0"
+        assert truncated_list[1] == "Line 1"
+        assert truncated_list[2] == "Line 2"
+        assert "17 more lines truncated" in truncated_list[3]
+
+        # Empty list should return empty list
+        assert _truncate_stacktrace([], 3) == []
+
+        # List with exactly max_lines elements should not be truncated
+        exact_list = [f"Line {i}" for i in range(3)]
+        assert _truncate_stacktrace(exact_list, 3) == exact_list
 
     @pytest.mark.asyncio
     async def test_get_hass_error_log_with_filters(self, mock_config):

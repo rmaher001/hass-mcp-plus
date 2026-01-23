@@ -1,6 +1,9 @@
 # MCP server Dockerfile for Claude Desktop integration
 FROM ghcr.io/astral-sh/uv:0.6.6-python3.13-bookworm
 
+# Metadata label for Docker MCP Gateway (required for local development)
+LABEL io.docker.server.metadata='{"name":"hass-mcp-plus","description":"Home Assistant MCP server for smart home control","command":["python","-m","app"],"secrets":[{"name":"hass-mcp-plus.ha_token","env":"HA_TOKEN"},{"name":"hass-mcp-plus.ha_url","env":"HA_URL"},{"name":"hass-mcp-plus.tz","env":"TZ"}]}'
+
 # Create non-root user for security
 RUN groupadd -r mcp && useradd -r -g mcp mcp
 
