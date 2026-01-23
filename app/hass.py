@@ -52,6 +52,32 @@ _SENSITIVE_KEYS = frozenset([
     "passphrase", "session", "cookie"
 ])
 
+# ============================================================================
+# Context Flooding Prevention - Pagination and Limit Constants
+# ============================================================================
+
+# History limits
+MAX_HISTORY_LIMIT = 500
+DEFAULT_HISTORY_LIMIT = 100
+
+# Error log limits
+MAX_ERROR_LOG_LIMIT = 100
+DEFAULT_ERROR_LOG_LIMIT = 50
+
+# Automation limits
+DEFAULT_AUTOMATION_LIMIT = 50
+MAX_AUTOMATION_LIMIT = 200
+
+# Resource limits (for MCP resources)
+DEFAULT_ALL_ENTITIES_LIMIT = 200
+DEFAULT_DOMAIN_ENTITIES_LIMIT = 100
+
+# Stacktrace truncation
+DEFAULT_STACKTRACE_LINES = 3
+
+# Valid sampling strategies for history
+VALID_SAMPLE_STRATEGIES = frozenset(["recent", "first", "even"])
+
 
 def sanitize_for_logging(data: Any) -> Any:
     """
@@ -405,22 +431,25 @@ async def get_entity_state(
 
 @handle_api_errors
 async def get_entities(
-    domain: Optional[str] = None, 
-    search_query: Optional[str] = None, 
+    domain: Optional[str] = None,
+    search_query: Optional[str] = None,
     limit: int = 100,
     fields: Optional[List[str]] = None,
-    lean: bool = True
+    lean: bool = True,
+    compact: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Get a list of all entities from Home Assistant with optional filtering and search
-    
+
     Args:
         domain: Optional domain to filter entities by (e.g., 'light', 'switch')
         search_query: Optional case-insensitive search term to filter by entity_id, friendly_name or other attributes
         limit: Maximum number of entities to return (default: 100)
         fields: Optional list of specific fields to include in each entity
         lean: If True (default), returns token-efficient versions with minimal fields
-    
+        compact: If True, returns minimal output (entity_id, state, friendly_name only).
+                 Takes precedence over lean and fields.
+
     Returns:
         List of entity dictionaries, optionally filtered by domain and search terms,
         and optionally limited to specific fields
@@ -471,9 +500,20 @@ async def get_entities(
     # Apply the limit
     if limit > 0 and len(entities) > limit:
         entities = entities[:limit]
-    
-    # Apply field filtering if requested
-    if fields:
+
+    # Apply field filtering based on mode (compact takes precedence)
+    if compact:
+        # Compact mode: only entity_id, state, friendly_name
+        result = []
+        for entity in entities:
+            compact_entity = {
+                "entity_id": entity["entity_id"],
+                "state": entity.get("state"),
+                "friendly_name": entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
+            }
+            result.append(compact_entity)
+        return result
+    elif fields:
         # Use explicit field list when provided
         return [filter_fields(entity, fields) for entity in entities]
     elif lean:
@@ -482,18 +522,18 @@ async def get_entities(
         for entity in entities:
             # Get the entity's domain
             entity_domain = entity["entity_id"].split('.')[0]
-            
+
             # Start with basic lean fields
             lean_fields = DEFAULT_LEAN_FIELDS.copy()
-            
+
             # Add domain-specific important attributes
             if entity_domain in DOMAIN_IMPORTANT_ATTRIBUTES:
                 for attr in DOMAIN_IMPORTANT_ATTRIBUTES[entity_domain]:
                     lean_fields.append(f"attr.{attr}")
-            
+
             # Filter and add to result
             result.append(filter_fields(entity, lean_fields))
-        
+
         return result
     else:
         # Return full entities
@@ -594,17 +634,38 @@ async def summarize_domain(domain: str, example_limit: int = 3) -> Dict[str, Any
         return {"error": f"Error generating domain summary: {str(e)}"}
 
 @handle_api_errors
-async def get_automations() -> List[Dict[str, Any]]:
-    """Get a list of all automations from Home Assistant"""
-    # Reuse the get_entities function with domain filtering
-    automation_entities = await get_entities(domain="automation")
-    
+async def get_automations(limit: int = DEFAULT_AUTOMATION_LIMIT) -> Dict[str, Any]:
+    """
+    Get a list of all automations from Home Assistant with pagination.
+
+    Args:
+        limit: Maximum number of automations to return (1-200, default: 50)
+
+    Returns:
+        A dictionary containing:
+        - automations: List of automation dictionaries
+        - count: Number of automations returned
+        - total_available: Total automations before limiting
+        - truncated: Whether results were truncated
+    """
+    # Enforce limit bounds
+    limit = max(1, min(limit, MAX_AUTOMATION_LIMIT))
+
+    # Reuse the get_entities function with domain filtering (get all, limit later)
+    automation_entities = await get_entities(domain="automation", limit=0, lean=False)
+
     # Check if we got an error response
     if isinstance(automation_entities, dict) and "error" in automation_entities:
-        return automation_entities  # Just pass through the error
-    
+        return {
+            "error": automation_entities["error"],
+            "automations": [],
+            "count": 0,
+            "total_available": 0,
+            "truncated": False
+        }
+
     # Process automation entities
-    result = []
+    all_automations = []
     try:
         for entity in automation_entities:
             # Extract relevant information
@@ -612,19 +673,37 @@ async def get_automations() -> List[Dict[str, Any]]:
                 "id": entity["entity_id"].split(".")[1],
                 "entity_id": entity["entity_id"],
                 "state": entity["state"],
-                "alias": entity["attributes"].get("friendly_name", entity["entity_id"]),
+                "alias": entity.get("attributes", {}).get("friendly_name", entity["entity_id"]),
             }
-            
+
             # Add any additional attributes that might be useful
-            if "last_triggered" in entity["attributes"]:
-                automation_info["last_triggered"] = entity["attributes"]["last_triggered"]
-            
-            result.append(automation_info)
+            attrs = entity.get("attributes", {})
+            if "last_triggered" in attrs:
+                automation_info["last_triggered"] = attrs["last_triggered"]
+
+            all_automations.append(automation_info)
     except (TypeError, KeyError) as e:
         # Handle errors in processing the entities
-        return {"error": f"Error processing automation entities: {str(e)}"}
-        
-    return result
+        return {
+            "error": f"Error processing automation entities: {str(e)}",
+            "automations": [],
+            "count": 0,
+            "total_available": 0,
+            "truncated": False
+        }
+
+    total_available = len(all_automations)
+    truncated = total_available > limit
+
+    # Apply limit
+    limited_automations = all_automations[:limit] if truncated else all_automations
+
+    return {
+        "automations": limited_automations,
+        "count": len(limited_automations),
+        "total_available": total_available,
+        "truncated": truncated
+    }
 
 @handle_api_errors
 async def reload_automations() -> Dict[str, Any]:
@@ -636,48 +715,160 @@ async def restart_home_assistant() -> Dict[str, Any]:
     """Restart Home Assistant"""
     return await call_service("homeassistant", "restart", {})
 
-@handle_api_errors
-async def get_hass_error_log() -> Dict[str, Any]:
+def _truncate_stacktrace(message: str, max_lines: int = DEFAULT_STACKTRACE_LINES) -> str:
     """
-    Get the Home Assistant error log for troubleshooting using WebSocket API
+    Truncate a stacktrace to a maximum number of lines.
+
+    Args:
+        message: The log message potentially containing a stacktrace
+        max_lines: Maximum lines to keep from the stacktrace
+
+    Returns:
+        Truncated message string
+    """
+    if not message:
+        return message
+
+    lines = message.split('\n')
+    if len(lines) <= max_lines:
+        return message
+
+    # Keep first max_lines and add truncation indicator
+    truncated = lines[:max_lines]
+    remaining = len(lines) - max_lines
+    truncated.append(f"... [{remaining} more lines truncated]")
+    return '\n'.join(truncated)
+
+
+@handle_api_errors
+async def get_hass_error_log(
+    limit: int = DEFAULT_ERROR_LOG_LIMIT,
+    integration: Optional[str] = None,
+    level: Optional[str] = None,
+    since_minutes: Optional[int] = None,
+    truncate_traces: bool = True
+) -> Dict[str, Any]:
+    """
+    Get the Home Assistant error log for troubleshooting using WebSocket API.
+
+    Includes filtering and stacktrace truncation to prevent context flooding.
+
+    Args:
+        limit: Maximum number of records to return (1-100, default: 50)
+        integration: Filter by integration name (e.g., "mqtt", "zwave")
+        level: Filter by log level ("ERROR", "WARNING", or None for both)
+        since_minutes: Only return errors from the last N minutes
+        truncate_traces: Truncate stacktraces to 3 lines (default: True)
 
     Returns:
         A dictionary containing:
-        - records: List of error/warning log records
-        - error_count: Number of ERROR entries found
-        - warning_count: Number of WARNING entries found
+        - records: List of error/warning log records (potentially truncated)
+        - count: Number of records returned
+        - total_available: Total records before filtering/limiting
+        - truncated: Whether the result was truncated
+        - traces_truncated: Whether stacktraces were truncated
+        - filters_applied: Dict of filters that were applied
+        - error_count: Number of ERROR entries in returned records
+        - warning_count: Number of WARNING entries in returned records
         - integration_mentions: Map of integration names to mention counts
         - error: Error message if retrieval failed
     """
     try:
+        # Enforce limit bounds
+        limit = max(1, min(limit, MAX_ERROR_LOG_LIMIT))
+
         # Use WebSocket API to retrieve system_log records
         # call_websocket_api returns result["result"] directly
-        records = await call_websocket_api("system_log/list")
+        all_records = await call_websocket_api("system_log/list")
 
-        if not records or not isinstance(records, list):
+        if not all_records or not isinstance(all_records, list):
             return {
                 "error": "Failed to retrieve system log records",
                 "records": [],
+                "count": 0,
+                "total_available": 0,
+                "truncated": False,
+                "traces_truncated": truncate_traces,
+                "filters_applied": {},
                 "error_count": 0,
                 "warning_count": 0,
                 "integration_mentions": {}
             }
 
-        # Count errors and warnings
-        error_count = sum(1 for r in records if r.get("level") == "ERROR")
-        warning_count = sum(1 for r in records if r.get("level") == "WARNING")
+        total_available = len(all_records)
+        filters_applied = {}
 
-        # Extract integration mentions from logger names
+        # Apply filters
+        filtered_records = all_records
+
+        # Filter by level
+        if level:
+            level_upper = level.upper()
+            if level_upper in ("ERROR", "WARNING"):
+                filtered_records = [r for r in filtered_records if r.get("level") == level_upper]
+                filters_applied["level"] = level_upper
+
+        # Filter by integration
+        if integration:
+            integration_lower = integration.lower()
+            filtered_records = [
+                r for r in filtered_records
+                if integration_lower in r.get("name", "").lower()
+            ]
+            filters_applied["integration"] = integration
+
+        # Filter by time (since_minutes)
+        if since_minutes and since_minutes > 0:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+            time_filtered = []
+            for r in filtered_records:
+                if r.get("timestamp"):
+                    try:
+                        ts = datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00"))
+                        if ts >= cutoff_time:
+                            time_filtered.append(r)
+                    except (ValueError, TypeError):
+                        # Skip records with invalid timestamps
+                        continue
+            filtered_records = time_filtered
+            filters_applied["since_minutes"] = since_minutes
+
+        # Count errors and warnings in filtered set
+        error_count = sum(1 for r in filtered_records if r.get("level") == "ERROR")
+        warning_count = sum(1 for r in filtered_records if r.get("level") == "WARNING")
+
+        # Extract integration mentions from all filtered records
         integration_mentions = {}
-        for record in records:
+        for record in filtered_records:
             logger_name = record.get("name", "")
             # Extract integration name from logger like "homeassistant.components.mqtt"
             if "homeassistant.components." in logger_name:
-                integration = logger_name.split("homeassistant.components.")[1].split(".")[0]
-                integration_mentions[integration] = integration_mentions.get(integration, 0) + 1
+                integ = logger_name.split("homeassistant.components.")[1].split(".")[0]
+                integration_mentions[integ] = integration_mentions.get(integ, 0) + 1
+
+        # Apply limit (take most recent records - they're typically newest first)
+        truncated = len(filtered_records) > limit
+        limited_records = filtered_records[:limit]
+
+        # Truncate stacktraces if requested (create copies to avoid mutating originals)
+        if truncate_traces:
+            truncated_records = []
+            for record in limited_records:
+                record_copy = record.copy()
+                if "message" in record_copy:
+                    record_copy["message"] = _truncate_stacktrace(record_copy["message"])
+                if "exception" in record_copy:
+                    record_copy["exception"] = _truncate_stacktrace(record_copy["exception"])
+                truncated_records.append(record_copy)
+            limited_records = truncated_records
 
         return {
-            "records": records,
+            "records": limited_records,
+            "count": len(limited_records),
+            "total_available": total_available,
+            "truncated": truncated,
+            "traces_truncated": truncate_traces,
+            "filters_applied": filters_applied,
             "error_count": error_count,
             "warning_count": warning_count,
             "integration_mentions": integration_mentions
@@ -687,6 +878,11 @@ async def get_hass_error_log() -> Dict[str, Any]:
         return {
             "error": f"Error retrieving error log: {str(e)}",
             "records": [],
+            "count": 0,
+            "total_available": 0,
+            "truncated": False,
+            "traces_truncated": truncate_traces,
+            "filters_applied": {},
             "error_count": 0,
             "warning_count": 0,
             "integration_mentions": {}
@@ -882,27 +1078,84 @@ def parse_datetime(dt_input: Union[str, datetime]) -> datetime:
             f"or keywords: 'now', 'today', 'yesterday'"
         )
 
+def _sample_history_records(
+    records: List[Dict[str, Any]],
+    limit: int,
+    strategy: str = "recent"
+) -> List[Dict[str, Any]]:
+    """
+    Sample history records to stay within limit while preserving useful data.
+
+    Args:
+        records: List of state change records
+        limit: Maximum number of records to return
+        strategy: Sampling strategy - "recent" (last N), "first" (first N), "even" (evenly spaced)
+
+    Returns:
+        Sampled list of records
+    """
+    if len(records) <= limit:
+        return records
+
+    if strategy == "recent":
+        # Return most recent records
+        return records[-limit:]
+    elif strategy == "first":
+        # Return oldest records
+        return records[:limit]
+    elif strategy == "even":
+        # Evenly sample across the range
+        step = len(records) / limit
+        # Ensure indices never exceed bounds due to floating point rounding
+        indices = [min(int(i * step), len(records) - 1) for i in range(limit)]
+        return [records[i] for i in indices]
+    else:
+        # Default to recent if strategy is invalid
+        return records[-limit:]
+
+
 @handle_api_errors
 async def get_entity_history_range(
     entity_id: str,
     start_time: Union[str, datetime],
     end_time: Optional[Union[str, datetime]] = None,
-    minimal_response: bool = True
-) -> List[Dict[str, Any]]:
+    minimal_response: bool = True,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    sample_strategy: str = "recent"
+) -> Dict[str, Any]:
     """
-    Get entity history for a specific date/time range.
+    Get entity history for a specific date/time range with pagination.
+
+    BREAKING CHANGE: Returns a dict with metadata instead of raw list.
 
     Args:
         entity_id: The entity ID to get history for
         start_time: ISO 8601 string or datetime object
         end_time: ISO 8601 string or datetime object (defaults to now)
         minimal_response: Reduce response size (default: True)
+        limit: Maximum records to return (1-500, default: 100)
+        sample_strategy: How to sample if over limit - "recent", "first", "even"
 
     Returns:
-        A list of state change objects, or an error dictionary
+        A dictionary containing:
+        - states: List of state change objects (possibly sampled)
+        - count: Number of states returned
+        - total_available: Total states before limiting
+        - truncated: Whether results were truncated
+        - sample_strategy: Strategy used for sampling
+        - start_time: Actual start time used
+        - end_time: Actual end time used
+        - note: Guidance message if truncated
     """
     await _rate_limiter.acquire()
     client = await get_client()
+
+    # Enforce limit bounds
+    limit = max(1, min(limit, MAX_HISTORY_LIMIT))
+
+    # Validate sample strategy
+    if sample_strategy not in VALID_SAMPLE_STRATEGIES:
+        sample_strategy = "recent"
 
     # Parse start_time
     start_dt = parse_datetime(start_time)
@@ -935,20 +1188,66 @@ async def get_entity_history_range(
     response = await client.get(url, headers=get_ha_headers(), params=params)
     response.raise_for_status()
 
-    # Return the JSON response
-    return response.json()
+    # Parse the response (API returns list of lists)
+    raw_data = response.json()
+
+    # Flatten the nested list structure
+    all_states = []
+    if raw_data and isinstance(raw_data, list):
+        for state_list in raw_data:
+            if isinstance(state_list, list):
+                all_states.extend(state_list)
+
+    total_available = len(all_states)
+    truncated = total_available > limit
+
+    # Apply sampling if needed
+    if truncated:
+        sampled_states = _sample_history_records(all_states, limit, sample_strategy)
+    else:
+        sampled_states = all_states
+
+    result = {
+        "states": sampled_states,
+        "count": len(sampled_states),
+        "total_available": total_available,
+        "truncated": truncated,
+        "sample_strategy": sample_strategy,
+        "start_time": start_time_iso,
+        "end_time": end_time_iso
+    }
+
+    if truncated:
+        result["note"] = f"Showing {len(sampled_states)} of {total_available}. Use get_statistics_range for aggregated data."
+
+    return result
 
 @handle_api_errors
-async def get_entity_history(entity_id: str, hours: int) -> List[Dict[str, Any]]:
+async def get_entity_history(
+    entity_id: str,
+    hours: int = 24,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    sample_strategy: str = "recent"
+) -> Dict[str, Any]:
     """
     Get the history of an entity's state changes from Home Assistant.
 
+    BREAKING CHANGE: Returns a dict with metadata instead of raw list.
+
     Args:
         entity_id: The entity ID to get history for.
-        hours: Number of hours of history to retrieve.
+        hours: Number of hours of history to retrieve (default: 24).
+        limit: Maximum records to return (1-500, default: 100).
+        sample_strategy: How to sample if over limit - "recent", "first", "even".
 
     Returns:
-        A list of state change objects, or an error dictionary.
+        A dictionary containing:
+        - states: List of state change objects (possibly sampled)
+        - count: Number of states returned
+        - total_available: Total states before limiting
+        - truncated: Whether results were truncated
+        - sample_strategy: Strategy used for sampling
+        - note: Guidance message if truncated
     """
     # Calculate time range
     end_time = datetime.now(timezone.utc)
@@ -959,7 +1258,9 @@ async def get_entity_history(entity_id: str, hours: int) -> List[Dict[str, Any]]
         entity_id=entity_id,
         start_time=start_time,
         end_time=end_time,
-        minimal_response=True
+        minimal_response=True,
+        limit=limit,
+        sample_strategy=sample_strategy
     )
 
 @handle_api_errors

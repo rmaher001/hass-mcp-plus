@@ -20,7 +20,13 @@ from app.hass import (
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
     get_hass_error_log, get_entity_history, get_entity_history_range,
     list_automation_traces, get_automation_trace,
-    sanitize_for_logging
+    sanitize_for_logging,
+    # Context flooding prevention constants
+    DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
+    DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
+    DEFAULT_AUTOMATION_LIMIT, MAX_AUTOMATION_LIMIT,
+    DEFAULT_ALL_ENTITIES_LIMIT, DEFAULT_DOMAIN_ENTITIES_LIMIT,
+    VALID_SAMPLE_STRATEGIES
 )
 
 # Type variable for generic functions
@@ -231,15 +237,16 @@ async def get_entity_resource(entity_id: str) -> str:
 @mcp.tool()
 @async_handler("list_entities")
 async def list_entities(
-    domain: Optional[str] = None, 
-    search_query: Optional[str] = None, 
+    domain: Optional[str] = None,
+    search_query: Optional[str] = None,
     limit: int = 100,
     fields: Optional[List[str]] = None,
-    detailed: bool = False
+    detailed: bool = False,
+    compact: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Get a list of Home Assistant entities with optional filtering
-    
+
     Args:
         domain: Optional domain to filter by (e.g., 'light', 'switch', 'sensor')
         search_query: Optional search term to filter entities by name, id, or attributes
@@ -247,21 +254,25 @@ async def list_entities(
         limit: Maximum number of entities to return (default: 100)
         fields: Optional list of specific fields to include in each entity
         detailed: If True, returns all entity fields without filtering
-    
+        compact: If True, returns minimal output (entity_id, state, friendly_name only).
+                 Takes precedence over detailed and fields. Best for large result sets.
+
     Returns:
         A list of entity dictionaries with lean formatting by default
-    
+
     Examples:
         domain="light" - get all lights
         search_query="kitchen", limit=20 - search entities
         domain="sensor", detailed=True - full sensor details
-    
+        compact=True - minimal output for token efficiency
+
     Best Practices:
+        - Use compact=True when you need many entities but minimal detail
         - Use lean format (default) for most operations
         - Prefer domain filtering over no filtering
         - For domain overviews, use domain_summary_tool instead of list_entities
         - Only request detailed=True when necessary for full attribute inspection
-        - To get all entity types/domains, use list_entities without a domain filter, 
+        - To get all entity types/domains, use list_entities without a domain filter,
           then extract domains from entity_ids
     """
     log_message = "Getting entities"
@@ -271,71 +282,89 @@ async def list_entities(
         log_message += f" matching: '{search_query}'"
     if limit != 100:
         log_message += f" (limit: {limit})"
-    if detailed:
+    if compact:
+        log_message += " (compact format)"
+    elif detailed:
         log_message += " (detailed format)"
     elif fields:
         log_message += f" (custom fields: {fields})"
     else:
         log_message += " (lean format)"
-    
+
     logger.info(log_message)
-    
+
     # Handle special case where search_query is a wildcard/asterisk - just ignore it
     if search_query == "*":
         search_query = None
         logger.info("Converting '*' search query to None (retrieving all entities)")
-    
+
     # Use the updated get_entities function with field filtering
     return await get_entities(
-        domain=domain, 
-        search_query=search_query, 
+        domain=domain,
+        search_query=search_query,
         limit=limit,
         fields=fields,
-        lean=not detailed  # Use lean format unless detailed is requested
+        lean=not detailed,  # Use lean format unless detailed is requested
+        compact=compact
     )
 
 @mcp.resource("hass://entities")
 @async_handler("get_all_entities_resource")
 async def get_all_entities_resource() -> str:
     """
-    Get a list of all Home Assistant entities as a resource
-    
-    This endpoint returns a complete list of all entities in Home Assistant, 
-    organized by domain. For token efficiency with large installations,
-    consider using domain-specific endpoints or the domain summary instead.
-    
+    Get a list of Home Assistant entities as a resource (LIMITED to prevent context flooding)
+
+    CONTEXT FLOODING PREVENTION:
+    - Output is LIMITED to 200 entities by default
+    - For full entity lists, use the list_entities tool with pagination
+
     Returns:
-        A markdown formatted string listing all entities grouped by domain
-        
+        A markdown formatted string listing entities grouped by domain
+
     Examples:
         ```
-        # Get all entities
+        # Get entities (limited)
         entities = mcp.get_resource("hass://entities")
         ```
-        
+
     Best Practices:
-        - WARNING: This endpoint can return large amounts of data with many entities
         - Prefer domain-filtered endpoints: hass://entities/domain/{domain}
         - For overview information, use domain summaries instead of full entity lists
-        - Consider starting with a search if looking for specific entities
+        - Use the list_entities tool for more control over results
     """
-    logger.info("Getting all entities as a resource")
-    entities = await get_entities(lean=True)
-    
+    logger.info("Getting all entities as a resource (limited)")
+
+    # Get all entities first to count total, but use compact mode
+    all_entities = await get_entities(limit=0, compact=True)  # limit=0 means no limit
+
     # Check if there was an error
-    if isinstance(entities, dict) and "error" in entities:
-        return f"Error retrieving entities: {entities['error']}"
-    if len(entities) == 1 and isinstance(entities[0], dict) and "error" in entities[0]:
-        return f"Error retrieving entities: {entities[0]['error']}"
-    
+    if isinstance(all_entities, dict) and "error" in all_entities:
+        return f"Error retrieving entities: {all_entities['error']}"
+    if len(all_entities) == 1 and isinstance(all_entities[0], dict) and "error" in all_entities[0]:
+        return f"Error retrieving entities: {all_entities[0]['error']}"
+
+    total_count = len(all_entities)
+    truncated = total_count > DEFAULT_ALL_ENTITIES_LIMIT
+
+    # Apply limit
+    entities = all_entities[:DEFAULT_ALL_ENTITIES_LIMIT] if truncated else all_entities
+
     # Format the entities as a string
     result = "# Home Assistant Entities\n\n"
-    result += f"Total entities: {len(entities)}\n\n"
-    result += "⚠️ **Note**: For better performance and token efficiency, consider using:\n"
+
+    if truncated:
+        result += f"⚠️ **TRUNCATED**: Showing {len(entities)} of {total_count} entities\n\n"
+        result += "To see more entities, use:\n"
+        result += "- `list_entities` tool with higher limit\n"
+        result += "- Domain-filtered endpoints: `hass://entities/domain/{domain}`\n\n"
+    else:
+        result += f"Total entities: {total_count}\n\n"
+
+    result += "**Tip**: For better token efficiency, consider using:\n"
     result += "- Domain filtering: `hass://entities/domain/{domain}`\n"
     result += "- Domain summaries: `hass://entities/domain/{domain}/summary`\n"
     result += "- Entity search: `hass://search/{query}`\n\n"
-    
+
     # Group entities by domain for better organization
     domains = {}
     for entity in entities:
@@ -343,20 +372,20 @@ async def get_all_entities_resource() -> str:
         if domain not in domains:
             domains[domain] = []
         domains[domain].append(entity)
-    
+
     # Build the string with entities grouped by domain
     for domain in sorted(domains.keys()):
         domain_count = len(domains[domain])
         result += f"## {domain.capitalize()} ({domain_count})\n\n"
         for entity in sorted(domains[domain], key=lambda e: e["entity_id"]):
-            # Get a friendly name if available
-            friendly_name = entity.get("attributes", {}).get("friendly_name", "")
+            # Get a friendly name if available (compact mode has friendly_name at top level)
+            friendly_name = entity.get("friendly_name", "")
             result += f"- **{entity['entity_id']}**: {entity['state']}"
             if friendly_name and friendly_name != entity["entity_id"]:
                 result += f" ({friendly_name})"
             result += "\n"
         result += "\n"
-    
+
     return result
 
 @mcp.tool()
@@ -762,106 +791,124 @@ async def get_entity_resource_detailed(entity_id: str) -> str:
 @async_handler("list_states_by_domain_resource")
 async def list_states_by_domain_resource(domain: str) -> str:
     """
-    Get a list of entities for a specific domain as a resource
-    
-    This endpoint provides all entities of a specific type (domain). It's much more
-    token-efficient than retrieving all entities when you only need entities of a 
-    specific type.
-    
+    Get a list of entities for a specific domain as a resource (LIMITED to prevent context flooding)
+
+    CONTEXT FLOODING PREVENTION:
+    - Output is LIMITED to 100 entities per domain
+    - For more entities, use the list_entities tool with domain filter
+
     Args:
         domain: The domain to filter by (e.g., 'light', 'switch', 'sensor')
-    
+
     Returns:
-        A markdown formatted string with all entities in the specified domain
-        
+        A markdown formatted string with entities in the specified domain
+
     Examples:
         ```
-        # Get all lights
+        # Get lights (limited)
         lights = mcp.get_resource("hass://entities/domain/light")
-        
-        # Get all climate devices
-        climate = mcp.get_resource("hass://entities/domain/climate")
-        
-        # Get all sensors
+
+        # Get sensors (limited)
         sensors = mcp.get_resource("hass://entities/domain/sensor")
         ```
-        
+
     Best Practices:
-        - Use this endpoint when you need detailed information about all entities of a specific type
-        - For a more concise overview, use the domain summary endpoint: hass://entities/domain/{domain}/summary
-        - For sensors and other high-count domains, consider using a search to further filter results
+        - For a concise overview, use the domain summary: hass://entities/domain/{domain}/summary
+        - Use the list_entities tool with domain filter for more control
+        - For high-count domains (sensor, binary_sensor), use search to narrow results
     """
-    logger.info(f"Getting entities for domain: {domain}")
-    
-    # Fixed pagination values for now
-    page = 1
-    page_size = 50
-    
-    # Get all entities for the specified domain (using lean format for token efficiency)
-    entities = await get_entities(domain=domain, lean=True)
-    
+    logger.info(f"Getting entities for domain: {domain} (limited)")
+
+    # Get all entities for the specified domain first to count (using compact for efficiency)
+    all_entities = await get_entities(domain=domain, limit=0, compact=True)
+
     # Check if there was an error
-    if isinstance(entities, dict) and "error" in entities:
-        return f"Error retrieving entities: {entities['error']}"
-    
+    if isinstance(all_entities, dict) and "error" in all_entities:
+        return f"Error retrieving entities: {all_entities['error']}"
+
+    total_count = len(all_entities)
+    truncated = total_count > DEFAULT_DOMAIN_ENTITIES_LIMIT
+
+    # Apply limit
+    entities = all_entities[:DEFAULT_DOMAIN_ENTITIES_LIMIT] if truncated else all_entities
+
     # Format the entities as a string
     result = f"# {domain.capitalize()} Entities\n\n"
-    
-    # Pagination info (fixed for now due to MCP limitations)
-    total_entities = len(entities)
-    
+
+    if truncated:
+        result += f"⚠️ **TRUNCATED**: Showing {len(entities)} of {total_count} {domain} entities\n\n"
+        result += "To see more, use:\n"
+        result += f"- `list_entities(domain=\"{domain}\", limit=200)` tool\n"
+        result += f"- Domain summary: `hass://entities/domain/{domain}/summary`\n\n"
+    else:
+        result += f"Total: {total_count} entities\n\n"
+
     # List the entities
     for entity in sorted(entities, key=lambda e: e["entity_id"]):
-        # Get a friendly name if available
-        friendly_name = entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
+        # Get a friendly name if available (compact mode has friendly_name at top level)
+        friendly_name = entity.get("friendly_name", entity["entity_id"])
         result += f"- **{entity['entity_id']}**: {entity['state']}"
         if friendly_name != entity["entity_id"]:
             result += f" ({friendly_name})"
         result += "\n"
-    
+
     # Add link to summary
     result += f"\n## Related Resources\n\n"
     result += f"- [View domain summary](/api/resource/hass://entities/domain/{domain}/summary)\n"
-    
+
     return result
 
 # Automation management MCP tools
 @mcp.tool()
 @async_handler("list_automations")
-async def list_automations() -> List[Dict[str, Any]]:
+async def list_automations(limit: int = DEFAULT_AUTOMATION_LIMIT) -> Dict[str, Any]:
     """
-    Get a list of all automations from Home Assistant
-    
-    This function retrieves all automations configured in Home Assistant,
+    Get a list of all automations from Home Assistant with pagination
+
+    This function retrieves automations configured in Home Assistant,
     including their IDs, entity IDs, state, and display names.
-    
+
+    Args:
+        limit: Maximum number of automations to return (1-200, default: 50)
+
     Returns:
-        A list of automation dictionaries, each containing id, entity_id, 
-        state, and alias (friendly name) fields.
-        
+        A dictionary containing:
+        - automations: List of automation dictionaries (id, entity_id, state, alias)
+        - count: Number of automations returned
+        - total_available: Total automations before limiting
+        - truncated: Whether results were truncated
+
     Examples:
-        Returns all automation objects with state and friendly names
-    
+        limit=50 - get first 50 automations (default)
+        limit=200 - get up to 200 automations
+
     """
-    logger.info("Getting all automations")
+    logger.info(f"Getting automations (limit: {limit})")
     try:
-        # Get automations will now return data from states API, which is more reliable
-        automations = await get_automations()
-        
-        # Handle error responses that might still occur
-        if isinstance(automations, dict) and "error" in automations:
-            logger.warning(f"Error getting automations: {automations['error']}")
-            return []
-            
-        # Handle case where response is a list with error
-        if isinstance(automations, list) and len(automations) == 1 and isinstance(automations[0], dict) and "error" in automations[0]:
-            logger.warning(f"Error getting automations: {automations[0]['error']}")
-            return []
-            
-        return automations
+        # Get automations with limit
+        result = await get_automations(limit=limit)
+
+        # Handle error responses
+        if isinstance(result, dict) and "error" in result:
+            logger.warning(f"Error getting automations: {result['error']}")
+            return {
+                "automations": [],
+                "count": 0,
+                "total_available": 0,
+                "truncated": False,
+                "error": result["error"]
+            }
+
+        return result
     except Exception as e:
         logger.error(f"Error in list_automations: {str(e)}")
-        return []
+        return {
+            "automations": [],
+            "count": 0,
+            "total_available": 0,
+            "truncated": False,
+            "error": str(e)
+        }
 
 
 @mcp.tool()
@@ -1203,15 +1250,19 @@ You'll help the user create optimized dashboards by:
 # Documentation endpoint
 @mcp.tool()
 @async_handler("get_history")
-async def get_history(entity_id: str, hours: int = 24) -> Dict[str, Any]:
+async def get_history(
+    entity_id: str,
+    hours: int = 24,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    sample_strategy: str = "recent"
+) -> Dict[str, Any]:
     """
-    Get RAW state changes for an entity (every single state change)
+    Get state changes for an entity with automatic pagination
 
-    TOKEN LIMIT WARNING:
-    - Returns EVERY state change in the period
-    - Response size depends on sensor update frequency × time range
-    - May exceed token limits for some LLM clients
-    - Consider using get_statistics for aggregated data instead
+    CONTEXT FLOODING PREVENTION:
+    - Results are LIMITED to prevent token overflow (default: 100 records)
+    - Use sample_strategy to control which records are returned
+    - For aggregated data, use get_statistics instead
 
     When to use this tool:
     - You need exact timestamps of state changes
@@ -1221,80 +1272,97 @@ async def get_history(entity_id: str, hours: int = 24) -> Dict[str, Any]:
     When NOT to use this tool:
     - You only need trends or aggregated values → use get_statistics
     - Long time periods for frequently-updating sensors
-    - Response might exceed token limits → use get_statistics
 
     Args:
         entity_id: The entity ID to get history for
         hours: Number of hours of history to retrieve (default: 24)
+        limit: Maximum records to return (1-500, default: 100)
+        sample_strategy: How to sample if over limit:
+            - "recent" (default): Most recent records
+            - "first": Oldest records
+            - "even": Evenly spaced across time range
 
     Returns:
         A dictionary containing:
         - entity_id: The entity ID requested
-        - states: List of state objects with timestamps
-        - count: Number of state changes found
+        - states: List of state objects with timestamps (possibly sampled)
+        - count: Number of states returned
+        - total_available: Total states before limiting
+        - truncated: Whether results were truncated
+        - sample_strategy: Strategy used for sampling
         - first_changed: Timestamp of earliest state change
         - last_changed: Timestamp of most recent state change
+        - note: Guidance message if truncated
 
     Examples:
         entity_id="binary_sensor.front_door" - door open/close events
-        entity_id="sensor.temperature", hours=1 - one hour of temperature readings
+        entity_id="sensor.temperature", hours=1, limit=50 - limited temperature readings
 
-    Note: If this tool returns a token limit error, reduce the hours parameter
-    or switch to get_statistics for aggregated data.
+    Note: If truncated=True, consider using get_statistics for aggregated data.
     """
-    logger.info(f"Getting history for entity: {entity_id}, hours: {hours}")
-    
+    logger.info(f"Getting history for entity: {entity_id}, hours: {hours}, limit: {limit}")
+
     try:
-        # Call the new hass function to get history
-        history_data = await get_entity_history(entity_id, hours)
-        
+        # Call the updated hass function (now returns dict with metadata)
+        result = await get_entity_history(entity_id, hours, limit, sample_strategy)
+
         # Check for errors from the API call
-        if isinstance(history_data, dict) and "error" in history_data:
+        if isinstance(result, dict) and "error" in result:
             return {
                 "entity_id": entity_id,
-                "error": history_data["error"],
+                "error": result["error"],
                 "states": [],
-                "count": 0
+                "count": 0,
+                "total_available": 0,
+                "truncated": False,
+                "sample_strategy": sample_strategy
             }
-        
-        # The result from the API is a list of lists of state changes
-        # We need to flatten it and process it
-        states = []
-        if history_data and isinstance(history_data, list):
-            for state_list in history_data:
-                states.extend(state_list)
-        
+
+        # The hass function now returns structured data
+        states = result.get("states", [])
+
         if not states:
             return {
                 "entity_id": entity_id,
                 "states": [],
                 "count": 0,
+                "total_available": result.get("total_available", 0),
+                "truncated": False,
+                "sample_strategy": sample_strategy,
                 "first_changed": None,
                 "last_changed": None,
                 "note": "No state changes found in the specified timeframe."
             }
-        
-        # Sort states by last_changed timestamp
-        states.sort(key=lambda x: x.get("last_changed", ""))
-        
+
         # Extract first and last changed timestamps
-        first_changed = states[0].get("last_changed")
-        last_changed = states[-1].get("last_changed")
-        
-        return {
+        first_changed = states[0].get("last_changed") if states else None
+        last_changed = states[-1].get("last_changed") if states else None
+
+        response = {
             "entity_id": entity_id,
             "states": states,
-            "count": len(states),
+            "count": result.get("count", len(states)),
+            "total_available": result.get("total_available", len(states)),
+            "truncated": result.get("truncated", False),
+            "sample_strategy": result.get("sample_strategy", sample_strategy),
             "first_changed": first_changed,
             "last_changed": last_changed
         }
+
+        if result.get("note"):
+            response["note"] = result["note"]
+
+        return response
     except Exception as e:
         logger.error(f"Error processing history for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
             "error": f"Error processing history: {str(e)}",
             "states": [],
-            "count": 0
+            "count": 0,
+            "total_available": 0,
+            "truncated": False,
+            "sample_strategy": sample_strategy
         }
 
 @mcp.tool()
@@ -1303,16 +1371,17 @@ async def get_history_range(
     entity_id: str,
     start_time: str,
     end_time: Optional[str] = None,
-    minimal_response: bool = True
+    minimal_response: bool = True,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    sample_strategy: str = "recent"
 ) -> Dict[str, Any]:
     """
-    Get RAW state changes for a specific date/time range
+    Get state changes for a specific date/time range with automatic pagination
 
-    TOKEN LIMIT WARNING:
-    - Returns EVERY state change in the period
-    - Response size = sensor update frequency × time range
-    - May exceed token limits for some LLM clients
-    - High risk of exceeding limits with date ranges
+    CONTEXT FLOODING PREVENTION:
+    - Results are LIMITED to prevent token overflow (default: 100 records)
+    - Use sample_strategy to control which records are returned
+    - For aggregated data, use get_statistics_range instead
 
     When to use this tool:
     - You need exact timestamps of specific state changes
@@ -1329,73 +1398,93 @@ async def get_history_range(
         start_time: Start time (ISO 8601, date only, or 'yesterday'/'today')
         end_time: End time (optional, defaults to 'now')
         minimal_response: Reduce response size (default: true)
+        limit: Maximum records to return (1-500, default: 100)
+        sample_strategy: How to sample if over limit:
+            - "recent" (default): Most recent records
+            - "first": Oldest records
+            - "even": Evenly spaced across time range
 
     Returns:
         A dictionary containing:
         - entity_id: The entity ID requested
-        - states: List of state objects with timestamps
-        - count: Number of state changes found
-        - start_time: Requested start time
-        - end_time: Requested or defaulted end time
+        - states: List of state objects with timestamps (possibly sampled)
+        - count: Number of states returned
+        - total_available: Total states before limiting
+        - truncated: Whether results were truncated
+        - sample_strategy: Strategy used for sampling
+        - start_time: Actual start time used
+        - end_time: Actual end time used
         - first_changed: Timestamp of earliest state change
         - last_changed: Timestamp of most recent state change
+        - note: Guidance message if truncated
 
     Examples:
         entity_id="sensor.temperature", start_time="2025-10-28T10:00:00Z", end_time="2025-10-28T11:00:00Z"
-        entity_id="light.living_room", start_time="yesterday", end_time="today"
+        entity_id="light.living_room", start_time="yesterday", end_time="today", limit=50
 
-    Note: If you receive a token limit error, use get_statistics_range instead
-    for the same time period to get aggregated data.
+    Note: If truncated=True, consider using get_statistics_range for aggregated data.
     """
-    logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}")
+    logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}, limit: {limit}")
 
     try:
-        # Get history using the new range function
-        history_data = await get_entity_history_range(entity_id, start_time, end_time, minimal_response)
+        # Get history using the updated range function (now returns dict with metadata)
+        result = await get_entity_history_range(
+            entity_id, start_time, end_time, minimal_response, limit, sample_strategy
+        )
 
         # Check for errors from the API call
-        if isinstance(history_data, dict) and "error" in history_data:
+        if isinstance(result, dict) and "error" in result:
             return {
                 "entity_id": entity_id,
-                "error": history_data["error"],
+                "error": result["error"],
                 "states": [],
                 "count": 0,
+                "total_available": 0,
+                "truncated": False,
+                "sample_strategy": sample_strategy,
                 "start_time": start_time,
                 "end_time": end_time or "now"
             }
 
-        # Process the result (same as get_history)
-        states = []
-        if history_data and isinstance(history_data, list):
-            for state_list in history_data:
-                states.extend(state_list)
+        # The hass function now returns structured data
+        states = result.get("states", [])
 
         if not states:
             return {
                 "entity_id": entity_id,
                 "states": [],
                 "count": 0,
-                "start_time": start_time,
-                "end_time": end_time or "now",
-                "message": "No state changes found in the specified range"
+                "total_available": result.get("total_available", 0),
+                "truncated": False,
+                "sample_strategy": sample_strategy,
+                "start_time": result.get("start_time", start_time),
+                "end_time": result.get("end_time", end_time or "now"),
+                "first_changed": None,
+                "last_changed": None,
+                "note": "No state changes found in the specified range"
             }
-
-        # Sort states by last_changed timestamp
-        states.sort(key=lambda x: x.get("last_changed", ""))
 
         # Extract first and last changed timestamps
         first_changed = states[0].get("last_changed") if states else None
         last_changed = states[-1].get("last_changed") if states else None
 
-        return {
+        response = {
             "entity_id": entity_id,
             "states": states,
-            "count": len(states),
-            "start_time": start_time,
-            "end_time": end_time or "now",
+            "count": result.get("count", len(states)),
+            "total_available": result.get("total_available", len(states)),
+            "truncated": result.get("truncated", False),
+            "sample_strategy": result.get("sample_strategy", sample_strategy),
+            "start_time": result.get("start_time", start_time),
+            "end_time": result.get("end_time", end_time or "now"),
             "first_changed": first_changed,
             "last_changed": last_changed
         }
+
+        if result.get("note"):
+            response["note"] = result["note"]
+
+        return response
     except ValueError as e:
         # Handle date parsing errors
         logger.error(f"Date parsing error for {entity_id}: {str(e)}")
@@ -1404,6 +1493,9 @@ async def get_history_range(
             "error": str(e),
             "states": [],
             "count": 0,
+            "total_available": 0,
+            "truncated": False,
+            "sample_strategy": sample_strategy,
             "start_time": start_time,
             "end_time": end_time or "now"
         }
@@ -1414,6 +1506,9 @@ async def get_history_range(
             "error": f"Error processing history: {str(e)}",
             "states": [],
             "count": 0,
+            "total_available": 0,
+            "truncated": False,
+            "sample_strategy": sample_strategy,
             "start_time": start_time,
             "end_time": end_time or "now"
         }
@@ -1604,26 +1699,58 @@ async def get_statistics_range(
 
 @mcp.tool()
 @async_handler("get_error_log")
-async def get_error_log() -> Dict[str, Any]:
+async def get_error_log(
+    limit: int = DEFAULT_ERROR_LOG_LIMIT,
+    integration: Optional[str] = None,
+    level: Optional[str] = None,
+    since_minutes: Optional[int] = None,
+    truncate_traces: bool = True
+) -> Dict[str, Any]:
     """
     Get the Home Assistant error log for troubleshooting using WebSocket API
 
+    CONTEXT FLOODING PREVENTION:
+    - Stacktraces are TRUNCATED to 3 lines by default (set truncate_traces=False for full traces)
+    - Results are LIMITED to prevent token overflow (default: 50 records)
+    - Use filters to narrow down results
+
+    Args:
+        limit: Maximum number of records to return (1-100, default: 50)
+        integration: Filter by integration name (e.g., "mqtt", "zwave", "hue")
+        level: Filter by log level ("ERROR" or "WARNING")
+        since_minutes: Only return errors from the last N minutes
+        truncate_traces: Truncate stacktraces to 3 lines (default: True)
+
     Returns:
         A dictionary containing:
-        - records: List of error/warning log records (each with timestamp, level, name, message)
-        - error_count: Number of ERROR entries found
-        - warning_count: Number of WARNING entries found
+        - records: List of error/warning log records (potentially truncated)
+        - count: Number of records returned
+        - total_available: Total records before filtering/limiting
+        - truncated: Whether the result was truncated
+        - traces_truncated: Whether stacktraces were truncated
+        - filters_applied: Dict of filters that were applied
+        - error_count: Number of ERROR entries in returned records
+        - warning_count: Number of WARNING entries in returned records
         - integration_mentions: Map of integration names to mention counts
         - error: Error message if retrieval failed
 
     Examples:
-        Returns structured log records with errors and warnings count
+        get_error_log() - default 50 recent errors with truncated traces
+        get_error_log(integration="mqtt") - only MQTT errors
+        get_error_log(level="ERROR", since_minutes=60) - only ERRORs from last hour
+        get_error_log(truncate_traces=False) - full stacktraces (may be large!)
+
     Best Practices:
-        - Use this tool when troubleshooting specific Home Assistant errors
-        - Look for patterns in repeated errors
-        - Pay attention to timestamps to correlate errors with events
-        - Focus on integrations with many mentions in the log
-        - Note: Only returns the 50 most recent errors/warnings (Home Assistant default)
+        - Use integration filter for focused troubleshooting
+        - Use since_minutes to narrow to recent issues
+        - Only disable truncate_traces when you need full stacktrace details
+        - Check integration_mentions to identify problematic integrations
     """
-    logger.info("Getting Home Assistant error log")
-    return await get_hass_error_log()
+    logger.info(f"Getting Home Assistant error log (limit: {limit}, integration: {integration}, level: {level})")
+    return await get_hass_error_log(
+        limit=limit,
+        integration=integration,
+        level=level,
+        since_minutes=since_minutes,
+        truncate_traces=truncate_traces
+    )
