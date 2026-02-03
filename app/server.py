@@ -20,13 +20,15 @@ from app.hass import (
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
     get_hass_error_log, get_entity_history, get_entity_history_range,
     list_automation_traces, get_automation_trace,
-    sanitize_for_logging,
+    sanitize_for_logging, render_template,
     # Context flooding prevention constants
     DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
     DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
     DEFAULT_AUTOMATION_LIMIT, MAX_AUTOMATION_LIMIT,
     DEFAULT_ALL_ENTITIES_LIMIT, DEFAULT_DOMAIN_ENTITIES_LIMIT,
-    VALID_SAMPLE_STRATEGIES
+    VALID_SAMPLE_STRATEGIES,
+    # Domain-specific attributes for lean formatting
+    DOMAIN_IMPORTANT_ATTRIBUTES
 )
 
 # Type variable for generic functions
@@ -1754,3 +1756,148 @@ async def get_error_log(
         since_minutes=since_minutes,
         truncate_traces=truncate_traces
     )
+
+
+@mcp.tool()
+@async_handler("query_entities")
+async def query_entities(
+    template: str,
+    limit: int = 50,
+    lean: bool = True,
+    compact: bool = False
+) -> Dict[str, Any]:
+    """
+    Query entities using Home Assistant's Jinja2 template engine
+
+    This tool leverages HA's powerful built-in template system for flexible
+    entity filtering. The template should return a list of entity state objects.
+
+    Args:
+        template: Jinja2 template that returns entity state objects
+        limit: Maximum entities to return (default: 50)
+        lean: Return minimal fields per entity with domain-specific attributes (default: True)
+        compact: Return only entity_id, state, friendly_name (default: False)
+
+    Common Template Patterns:
+        Low battery sensors:
+            {{ states.sensor | selectattr('attributes.battery_level', 'defined')
+               | selectattr('attributes.battery_level', 'lt', 20) | list }}
+
+        Lights that are on:
+            {{ states.light | selectattr('state', 'eq', 'on') | list }}
+
+        Unavailable entities:
+            {{ states | selectattr('state', 'in', ['unavailable', 'unknown']) | list }}
+
+        Entities in an area:
+            {{ area_entities('garage') | map('states') | list }}
+
+        Entities by label:
+            {{ label_entities('critical') | map('states') | list }}
+
+        Temperature sensors above 75:
+            {{ states.sensor | selectattr('attributes.device_class', 'eq', 'temperature')
+               | selectattr('state', 'gt', '75') | list }}
+
+        Recently changed (last 5 min):
+            {{ states | selectattr('last_changed', 'gt', now() - timedelta(minutes=5)) | list }}
+
+        Regex match on entity_id:
+            {{ states.sensor | selectattr('entity_id', 'match', '.*_temperature$') | list }}
+
+        Compound filters (AND):
+            {{ states.light | selectattr('state', 'eq', 'on')
+               | selectattr('attributes.brightness', 'gt', 100) | list }}
+
+    Returns:
+        Dictionary containing:
+        - count: Number of entities returned
+        - total_matched: Total entities matching (before limit)
+        - truncated: Whether results were limited
+        - template: The template that was executed
+        - entities: List of matching entities
+        - error: Error message if template failed
+
+    Note: Template must return a list of state objects. Use | list at the end.
+    """
+    logger.info("Querying entities with template")
+
+    try:
+        result = await render_template(template)
+
+        # Handle errors
+        if isinstance(result, dict) and "error" in result:
+            return {
+                "count": 0,
+                "total_matched": 0,
+                "truncated": False,
+                "template": template,
+                "entities": [],
+                "error": result["error"]
+            }
+
+        # Handle non-list results
+        if not isinstance(result, list):
+            return {
+                "count": 0,
+                "total_matched": 0,
+                "truncated": False,
+                "template": template,
+                "entities": [],
+                "error": f"Template must return a list, got {type(result).__name__}. "
+                         f"Make sure to use '| list' at the end of your template."
+            }
+
+        total_matched = len(result)
+        truncated = total_matched > limit
+        entities = result[:limit]
+
+        # Apply output formatting
+        if compact:
+            # Compact mode: only entity_id, state, friendly_name
+            entities = [
+                {
+                    "entity_id": e.get("entity_id"),
+                    "state": e.get("state"),
+                    "friendly_name": e.get("attributes", {}).get("friendly_name")
+                }
+                for e in entities
+            ]
+        elif lean:
+            # Lean mode: domain-specific important attributes
+            formatted = []
+            for entity in entities:
+                entity_id = entity.get("entity_id", "")
+                domain = entity_id.split(".")[0] if entity_id else ""
+                lean_entity = {
+                    "entity_id": entity_id,
+                    "state": entity.get("state"),
+                    "friendly_name": entity.get("attributes", {}).get("friendly_name")
+                }
+                # Add domain-specific attributes
+                attrs = entity.get("attributes", {})
+                important_attrs = DOMAIN_IMPORTANT_ATTRIBUTES.get(domain, [])
+                for attr in important_attrs:
+                    if attr in attrs:
+                        lean_entity[attr] = attrs[attr]
+                formatted.append(lean_entity)
+            entities = formatted
+
+        return {
+            "count": len(entities),
+            "total_matched": total_matched,
+            "truncated": truncated,
+            "template": template,
+            "entities": entities
+        }
+
+    except Exception as e:
+        logger.error(f"Error in query_entities: {str(e)}", exc_info=True)
+        return {
+            "count": 0,
+            "total_matched": 0,
+            "truncated": False,
+            "template": template,
+            "entities": [],
+            "error": f"Error processing template result: {str(e)}"
+        }

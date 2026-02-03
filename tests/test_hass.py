@@ -5,7 +5,7 @@ import json
 import httpx
 from typing import Dict, List, Any
 
-from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors
+from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, render_template
 
 class TestHassAPI:
     """Test the Home Assistant API functions."""
@@ -593,3 +593,93 @@ class TestContextFloodingPrevention:
                     assert "truncated" in result
                     assert "start_time" in result
                     assert "end_time" in result
+
+
+class TestRenderTemplate:
+    """Test the render_template function."""
+
+    @pytest.mark.asyncio
+    async def test_render_template_success_list(self, mock_config):
+        """Test successful template rendering that returns a list."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '[{"entity_id": "light.test", "state": "on", "attributes": {"friendly_name": "Test Light"}}]'
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await render_template("{{ states.light | list }}")
+
+                    # Should parse as JSON list
+                    assert isinstance(result, list)
+                    assert len(result) == 1
+                    assert result[0]["entity_id"] == "light.test"
+                    assert result[0]["state"] == "on"
+
+                    # Verify API was called correctly
+                    mock_client.post.assert_called_once()
+                    called_url = mock_client.post.call_args[0][0]
+                    assert called_url == f"{mock_config['hass_url']}/api/template"
+                    called_json = mock_client.post.call_args[1]["json"]
+                    assert called_json["template"] == "{{ states.light | list }}"
+
+    @pytest.mark.asyncio
+    async def test_render_template_success_string(self, mock_config):
+        """Test successful template rendering that returns a string."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "Hello World"
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await render_template("{{ 'Hello World' }}")
+
+                    # Should return as string (not JSON parseable)
+                    assert isinstance(result, str)
+                    assert result == "Hello World"
+
+    @pytest.mark.asyncio
+    async def test_render_template_error(self, mock_config):
+        """Test template rendering error."""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = "UndefinedError: 'invalid_var' is undefined"
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await render_template("{{ invalid_var }}")
+
+                    # Should return error dict
+                    assert isinstance(result, dict)
+                    assert "error" in result
+                    assert "Template rendering failed" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_render_template_empty_list(self, mock_config):
+        """Test template rendering that returns an empty list."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "[]"
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    result = await render_template("{{ states.nonexistent | list }}")
+
+                    # Should return empty list
+                    assert isinstance(result, list)
+                    assert len(result) == 0

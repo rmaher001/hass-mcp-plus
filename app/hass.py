@@ -1396,6 +1396,50 @@ async def get_entity_statistics_range(
         }
 
 @handle_api_errors
+async def render_template(template: str) -> Any:
+    """
+    Render a Jinja2 template using Home Assistant's template API.
+
+    This leverages HA's powerful built-in template engine for flexible
+    entity filtering using selectattr, area_entities, label_entities, etc.
+
+    Security Note:
+        Home Assistant's template engine uses a sandboxed Jinja2 environment
+        that does not allow arbitrary Python code execution. The sandbox
+        restricts access to only HA-specific functions and filters.
+        Users with MCP access already have full HA API access via their token.
+
+    Args:
+        template: Jinja2 template string (HA Jinja2 syntax, not Python)
+
+    Returns:
+        The rendered result (can be string, list, dict, etc.)
+        Returns {"error": "..."} if template rendering fails
+    """
+    await _rate_limiter.acquire()
+    client = await get_client()
+
+    response = await client.post(
+        f"{HA_URL}/api/template",
+        headers=get_ha_headers(),
+        json={"template": template}
+    )
+
+    if response.status_code != 200:
+        return {"error": f"Template rendering failed: {response.text}"}
+
+    # Response is the rendered result as text
+    result = response.text
+
+    # Try to parse as JSON if it looks like a list/dict
+    try:
+        return json.loads(result)
+    except json.JSONDecodeError:
+        # Return as-is if not JSON (could be a simple string result)
+        return result
+
+
+@handle_api_errors
 async def get_system_overview() -> Dict[str, Any]:
     """
     Get a comprehensive overview of the entire Home Assistant system
