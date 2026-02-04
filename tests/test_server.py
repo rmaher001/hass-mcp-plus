@@ -310,58 +310,71 @@ class TestMCPServer:
         """Test basic entity query with template."""
         from app.server import query_entities
 
-        # Mock template result - list of entity state objects
-        mock_entities = [
-            {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
-            {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen", "brightness": 128}}
-        ]
+        # Mock template result - now returns entity IDs (N+1 approach)
+        mock_entity_ids = ["light.living_room", "light.kitchen"]
 
-        with patch("app.server.render_template", return_value=mock_entities) as mock_render:
-            result = await query_entities(
-                template="{{ states.light | selectattr('state', 'eq', 'on') | list }}"
-            )
+        # Mock get_entity_state to return full state for each entity
+        async def mock_get_state(entity_id, lean=False):
+            states = {
+                "light.living_room": {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
+                "light.kitchen": {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen", "brightness": 128}}
+            }
+            return states.get(entity_id, {"error": "not found"})
 
-            # Verify render_template was called with the template
-            mock_render.assert_called_once_with("{{ states.light | selectattr('state', 'eq', 'on') | list }}")
+        with patch("app.server.render_template", return_value=mock_entity_ids) as mock_render:
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | selectattr('state', 'eq', 'on') | list }}"
+                )
 
-            # Check result structure
-            assert isinstance(result, dict)
-            assert result["count"] == 2
-            assert result["total_matched"] == 2
-            assert result["truncated"] is False
-            assert "entities" in result
-            assert len(result["entities"]) == 2
+                # Verify render_template was called with transformed template (extracts entity_ids)
+                mock_render.assert_called_once_with("{{ states.light | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list | to_json }}")
+
+                # Check result structure
+                assert isinstance(result, dict)
+                assert result["count"] == 2
+                assert result["total_matched"] == 2
+                assert result["truncated"] is False
+                assert "entities" in result
+                assert len(result["entities"]) == 2
 
     @pytest.mark.asyncio
     async def test_query_entities_with_limit(self):
         """Test query with limit applied."""
         from app.server import query_entities
 
-        # Mock 100 entities
-        mock_entities = [
-            {"entity_id": f"sensor.test_{i}", "state": str(i), "attributes": {"friendly_name": f"Test {i}"}}
-            for i in range(100)
-        ]
+        # Mock 100 entity IDs
+        mock_entity_ids = [f"sensor.test_{i}" for i in range(100)]
 
-        with patch("app.server.render_template", return_value=mock_entities):
-            result = await query_entities(
-                template="{{ states.sensor | list }}",
-                limit=10
-            )
+        # Mock get_entity_state to return full state for each entity
+        async def mock_get_state(entity_id, lean=False):
+            # Extract index from entity_id like "sensor.test_42"
+            idx = int(entity_id.split("_")[-1])
+            return {"entity_id": entity_id, "state": str(idx), "attributes": {"friendly_name": f"Test {idx}"}}
 
-            # Check that limit is respected
-            assert result["count"] == 10
-            assert result["total_matched"] == 100
-            assert result["truncated"] is True
-            assert len(result["entities"]) == 10
+        with patch("app.server.render_template", return_value=mock_entity_ids):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.sensor | list }}",
+                    limit=10
+                )
+
+                # Check that limit is respected
+                assert result["count"] == 10
+                assert result["total_matched"] == 100
+                assert result["truncated"] is True
+                assert len(result["entities"]) == 10
 
     @pytest.mark.asyncio
     async def test_query_entities_lean_format(self):
         """Test lean output format with domain-specific attributes."""
         from app.server import query_entities
 
-        mock_entities = [
-            {
+        mock_entity_ids = ["light.test"]
+
+        # Mock get_entity_state returning full state (lean formatting applied by query_entities)
+        async def mock_get_state(entity_id, lean=False):
+            return {
                 "entity_id": "light.test",
                 "state": "on",
                 "attributes": {
@@ -372,31 +385,33 @@ class TestMCPServer:
                     "extra_attr": "should_not_appear"
                 }
             }
-        ]
 
-        with patch("app.server.render_template", return_value=mock_entities):
-            result = await query_entities(
-                template="{{ states.light | list }}",
-                lean=True,
-                compact=False
-            )
+        with patch("app.server.render_template", return_value=mock_entity_ids):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | list }}",
+                    lean=True,
+                    compact=False
+                )
 
-            # Check lean format includes domain-specific attributes
-            entity = result["entities"][0]
-            assert entity["entity_id"] == "light.test"
-            assert entity["state"] == "on"
-            assert entity["friendly_name"] == "Test Light"
-            assert entity["brightness"] == 255  # Domain-specific for light
-            # extra_attr should not appear in lean mode
-            assert "extra_attr" not in entity
+                # Check lean format includes domain-specific attributes
+                entity = result["entities"][0]
+                assert entity["entity_id"] == "light.test"
+                assert entity["state"] == "on"
+                assert entity["friendly_name"] == "Test Light"
+                assert entity["brightness"] == 255  # Domain-specific for light
+                # extra_attr should not appear in lean mode
+                assert "extra_attr" not in entity
 
     @pytest.mark.asyncio
     async def test_query_entities_compact_format(self):
         """Test compact output format."""
         from app.server import query_entities
 
-        mock_entities = [
-            {
+        mock_entity_ids = ["light.test"]
+
+        async def mock_get_state(entity_id, lean=False):
+            return {
                 "entity_id": "light.test",
                 "state": "on",
                 "attributes": {
@@ -405,22 +420,22 @@ class TestMCPServer:
                     "color_temp": 370
                 }
             }
-        ]
 
-        with patch("app.server.render_template", return_value=mock_entities):
-            result = await query_entities(
-                template="{{ states.light | list }}",
-                compact=True
-            )
+        with patch("app.server.render_template", return_value=mock_entity_ids):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | list }}",
+                    compact=True
+                )
 
-            # Check compact format has only essential fields
-            entity = result["entities"][0]
-            assert entity["entity_id"] == "light.test"
-            assert entity["state"] == "on"
-            assert entity["friendly_name"] == "Test Light"
-            # Should NOT have any other attributes
-            assert "brightness" not in entity
-            assert "color_temp" not in entity
+                # Check compact format has only essential fields
+                entity = result["entities"][0]
+                assert entity["entity_id"] == "light.test"
+                assert entity["state"] == "on"
+                assert entity["friendly_name"] == "Test Light"
+                # Should NOT have any other attributes
+                assert "brightness" not in entity
+                assert "color_temp" not in entity
 
     @pytest.mark.asyncio
     async def test_query_entities_template_error(self):
@@ -442,13 +457,31 @@ class TestMCPServer:
 
     @pytest.mark.asyncio
     async def test_query_entities_non_list_result(self):
-        """Test error handling when template returns non-list."""
+        """Test error handling when template returns non-JSON-parseable string."""
         from app.server import query_entities
 
-        # Template returns a string instead of a list
+        # Template returns a string that's not valid JSON
         with patch("app.server.render_template", return_value="not a list"):
             result = await query_entities(
                 template="{{ 'not a list' }}"
+            )
+
+            # Check error response - with N+1 approach we get a JSON parse error
+            assert result["count"] == 0
+            assert result["total_matched"] == 0
+            assert result["entities"] == []
+            assert "error" in result
+            assert "Failed to parse entity IDs as JSON" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_query_entities_non_list_type(self):
+        """Test error handling when render_template returns wrong type (e.g., int)."""
+        from app.server import query_entities
+
+        # Template returns an int instead of a list
+        with patch("app.server.render_template", return_value=42):
+            result = await query_entities(
+                template="{{ 42 }}"
             )
 
             # Check error response
@@ -464,6 +497,7 @@ class TestMCPServer:
         from app.server import query_entities
 
         with patch("app.server.render_template", return_value=[]):
+            # No need to mock get_entity_state since empty list means no calls
             result = await query_entities(
                 template="{{ states.nonexistent | list }}"
             )
@@ -477,25 +511,81 @@ class TestMCPServer:
 
     @pytest.mark.asyncio
     async def test_query_entities_malformed_entity(self):
-        """Test handling of entity without entity_id field."""
+        """Test handling of malformed entries in entity_id list (e.g., None values)."""
         from app.server import query_entities
 
-        # Entity missing entity_id
-        mock_entities = [
-            {"state": "on", "attributes": {"friendly_name": "No ID"}},  # Missing entity_id
-            {"entity_id": "light.valid", "state": "on", "attributes": {"friendly_name": "Valid"}}
+        # Entity ID list with malformed entry (None) - this can happen with bad templates
+        mock_entity_ids = [
+            None,  # Malformed - should be skipped
+            "light.valid"
         ]
 
-        with patch("app.server.render_template", return_value=mock_entities):
-            result = await query_entities(
-                template="{{ states.light | list }}",
-                lean=True
-            )
+        async def mock_get_state(entity_id, lean=False):
+            return {"entity_id": entity_id, "state": "on", "attributes": {"friendly_name": "Valid"}}
 
-            # Should handle gracefully - entity_id will be empty string for malformed entry
-            assert isinstance(result, dict)
-            assert "error" not in result
-            assert result["count"] == 2
-            # First entity should have empty entity_id
-            assert result["entities"][0]["entity_id"] == ""
-            assert result["entities"][1]["entity_id"] == "light.valid"
+        with patch("app.server.render_template", return_value=mock_entity_ids):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | list }}",
+                    lean=True
+                )
+
+                # Should handle gracefully - None entry should be skipped
+                assert isinstance(result, dict)
+                assert "error" not in result
+                # Only the valid entity should be returned
+                assert result["count"] == 1
+                assert result["total_matched"] == 2  # Total includes malformed
+                assert result["entities"][0]["entity_id"] == "light.valid"
+
+    @pytest.mark.asyncio
+    async def test_query_entities_json_string_result(self):
+        """Test handling when HA returns entity IDs as JSON string (actual API behavior)."""
+        from app.server import query_entities
+
+        # HA's /api/template actually returns a JSON string, not a parsed list
+        mock_json_string = '["light.living_room", "light.kitchen"]'
+
+        async def mock_get_state(entity_id, lean=False):
+            states = {
+                "light.living_room": {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room"}},
+                "light.kitchen": {"entity_id": "light.kitchen", "state": "off", "attributes": {"friendly_name": "Kitchen"}}
+            }
+            return states.get(entity_id, {"error": "not found"})
+
+        with patch("app.server.render_template", return_value=mock_json_string):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | list }}"
+                )
+
+                assert isinstance(result, dict)
+                assert "error" not in result
+                assert result["count"] == 2
+                assert result["total_matched"] == 2
+                assert result["entities"][0]["entity_id"] == "light.living_room"
+                assert result["entities"][1]["entity_id"] == "light.kitchen"
+
+    @pytest.mark.asyncio
+    async def test_query_entities_entity_not_found(self):
+        """Test handling when get_entity_state returns an error for an entity."""
+        from app.server import query_entities
+
+        mock_entity_ids = ["light.exists", "light.deleted"]
+
+        async def mock_get_state(entity_id, lean=False):
+            if entity_id == "light.exists":
+                return {"entity_id": "light.exists", "state": "on", "attributes": {"friendly_name": "Exists"}}
+            else:
+                return {"error": "Entity not found"}
+
+        with patch("app.server.render_template", return_value=mock_entity_ids):
+            with patch("app.server.get_entity_state", side_effect=mock_get_state):
+                result = await query_entities(
+                    template="{{ states.light | list }}"
+                )
+
+                # Entity with error should be skipped
+                assert result["count"] == 1
+                assert result["total_matched"] == 2
+                assert result["entities"][0]["entity_id"] == "light.exists"
