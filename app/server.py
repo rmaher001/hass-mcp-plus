@@ -1,7 +1,6 @@
 import functools
 import logging
 import json
-import re
 import httpx
 from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast
 
@@ -1824,20 +1823,7 @@ async def query_entities(
     logger.info("Querying entities with template")
 
     try:
-        # HA's /api/template returns TemplateState objects as Python repr strings,
-        # not JSON. The | to_json filter fails because TemplateState isn't JSON serializable.
-        #
-        # Solution: N+1 approach
-        # 1. Transform template to extract only entity_ids (which ARE JSON serializable)
-        # 2. Parse the JSON list of entity_ids (1 API call)
-        # 3. Fetch full state for each entity_id via get_entity_state() (N API calls)
-        entity_id_template = re.sub(
-            r'\|\s*list\s*\}\}',
-            "| map(attribute='entity_id') | list | to_json }}",
-            template
-        )
-
-        result = await render_template(entity_id_template)
+        result = await render_template(template)
 
         # Handle errors
         if isinstance(result, dict) and "error" in result:
@@ -1850,23 +1836,8 @@ async def query_entities(
                 "error": result["error"]
             }
 
-        # Parse entity_ids - result could be a JSON string or already a list
-        entity_ids: list[str] = []
-        if isinstance(result, str):
-            try:
-                entity_ids = json.loads(result)
-            except json.JSONDecodeError as e:
-                return {
-                    "count": 0,
-                    "total_matched": 0,
-                    "truncated": False,
-                    "template": template,
-                    "entities": [],
-                    "error": f"Failed to parse entity IDs as JSON: {str(e)}"
-                }
-        elif isinstance(result, list):
-            entity_ids = result
-        else:
+        # Handle non-list results
+        if not isinstance(result, list):
             return {
                 "count": 0,
                 "total_matched": 0,
@@ -1877,19 +1848,9 @@ async def query_entities(
                          f"Make sure to use '| list' at the end of your template."
             }
 
-        total_matched = len(entity_ids)
+        total_matched = len(result)
         truncated = total_matched > limit
-
-        # Fetch full state for each entity_id (N API calls)
-        # Apply limit before fetching to minimize API calls
-        entities = []
-        for entity_id in entity_ids[:limit]:
-            if not isinstance(entity_id, str):
-                # Skip malformed entries (e.g., None values)
-                continue
-            state = await get_entity_state(entity_id, lean=lean)
-            if "error" not in state:
-                entities.append(state)
+        entities = result[:limit]
 
         # Apply output formatting
         if compact:
@@ -1903,8 +1864,7 @@ async def query_entities(
                 for e in entities
             ]
         elif lean:
-            # Lean mode: get_entity_state already returns lean format when lean=True
-            # But we need to normalize the format for consistency
+            # Lean mode: domain-specific important attributes
             formatted = []
             for entity in entities:
                 entity_id = entity.get("entity_id", "")
@@ -1912,7 +1872,7 @@ async def query_entities(
                 lean_entity = {
                     "entity_id": entity_id,
                     "state": entity.get("state"),
-                    "friendly_name": entity.get("attributes", {}).get("friendly_name") or entity.get("friendly_name")
+                    "friendly_name": entity.get("attributes", {}).get("friendly_name")
                 }
                 # Add domain-specific attributes
                 attrs = entity.get("attributes", {})
@@ -1920,9 +1880,6 @@ async def query_entities(
                 for attr in important_attrs:
                     if attr in attrs:
                         lean_entity[attr] = attrs[attr]
-                    elif attr in entity:
-                        # get_entity_state with lean=True may flatten attributes
-                        lean_entity[attr] = entity[attr]
                 formatted.append(lean_entity)
             entities = formatted
 
