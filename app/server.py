@@ -1031,7 +1031,7 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
     
     """
     logger.info(f"Calling Home Assistant service: {domain}.{service} with data: {sanitize_for_logging(data)}")
-    return await call_service(domain, service, data or {})
+    return await hass_call_service(domain, service, data or {})
 
 # Prompt functionality
 @mcp.prompt()
