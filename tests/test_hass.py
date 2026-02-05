@@ -5,7 +5,7 @@ import json
 import httpx
 from typing import Dict, List, Any
 
-from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, render_template
+from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, render_template, evaluate_cel_filter
 
 class TestHassAPI:
     """Test the Home Assistant API functions."""
@@ -683,3 +683,149 @@ class TestRenderTemplate:
                     # Should return empty list
                     assert isinstance(result, list)
                     assert len(result) == 0
+
+
+class TestCELFiltering:
+    """Test the CEL-based entity filtering function."""
+
+    def _make_entity(self, entity_id: str, state: str, attributes: dict = None) -> dict:
+        """Helper to create entity dicts matching HA /api/states format."""
+        return {
+            "entity_id": entity_id,
+            "state": state,
+            "attributes": attributes or {},
+            "last_changed": "2025-01-01T00:00:00Z",
+            "last_updated": "2025-01-01T00:00:00Z",
+        }
+
+    def test_cel_filter_basic_equality(self):
+        """CEL expression state == 'on' returns only matching entities."""
+        entities = [
+            self._make_entity("light.a", "on"),
+            self._make_entity("light.b", "off"),
+            self._make_entity("light.c", "on"),
+        ]
+        result = evaluate_cel_filter(entities, 'state == "on"')
+        assert len(result) == 2
+        assert all(e["entity_id"] in ("light.a", "light.c") for e in result)
+
+    def test_cel_filter_numeric_comparison(self):
+        """CEL expression state < 30 with proper numeric coercion."""
+        entities = [
+            self._make_entity("sensor.battery_a", "25"),
+            self._make_entity("sensor.battery_b", "80"),
+            self._make_entity("sensor.battery_c", "10"),
+        ]
+        result = evaluate_cel_filter(entities, "state < 30")
+        assert len(result) == 2
+        entity_ids = [e["entity_id"] for e in result]
+        assert "sensor.battery_a" in entity_ids
+        assert "sensor.battery_c" in entity_ids
+
+    def test_cel_filter_attribute_access(self):
+        """CEL expression with nested attribute access."""
+        entities = [
+            self._make_entity("sensor.bat", "25", {"device_class": "battery", "friendly_name": "Battery"}),
+            self._make_entity("sensor.temp", "72", {"device_class": "temperature", "friendly_name": "Temp"}),
+        ]
+        result = evaluate_cel_filter(entities, 'attributes.device_class == "battery"')
+        assert len(result) == 1
+        assert result[0]["entity_id"] == "sensor.bat"
+
+    def test_cel_filter_or_logic(self):
+        """CEL expression with OR logic returns union of matches."""
+        entities = [
+            self._make_entity("sensor.a", "unavailable"),
+            self._make_entity("sensor.b", "unknown"),
+            self._make_entity("sensor.c", "42"),
+        ]
+        result = evaluate_cel_filter(entities, 'state == "unavailable" || state == "unknown"')
+        assert len(result) == 2
+        entity_ids = [e["entity_id"] for e in result]
+        assert "sensor.a" in entity_ids
+        assert "sensor.b" in entity_ids
+
+    def test_cel_filter_and_logic(self):
+        """CEL expression with AND logic returns only entities matching ALL conditions."""
+        entities = [
+            self._make_entity("sensor.a", "25", {"device_class": "battery"}),
+            self._make_entity("sensor.b", "80", {"device_class": "battery"}),
+            self._make_entity("sensor.c", "25", {"device_class": "temperature"}),
+        ]
+        result = evaluate_cel_filter(entities, 'state < 30 && attributes.device_class == "battery"')
+        assert len(result) == 1
+        assert result[0]["entity_id"] == "sensor.a"
+
+    def test_cel_filter_negation(self):
+        """CEL expression with != excludes matching entities."""
+        entities = [
+            self._make_entity("cover.a", "closed"),
+            self._make_entity("cover.b", "open"),
+            self._make_entity("cover.c", "closed"),
+        ]
+        result = evaluate_cel_filter(entities, 'state != "closed"')
+        assert len(result) == 1
+        assert result[0]["entity_id"] == "cover.b"
+
+    def test_cel_filter_numeric_coercion(self):
+        """Entities with non-numeric states are excluded from numeric comparisons, not errored."""
+        entities = [
+            self._make_entity("sensor.a", "25"),
+            self._make_entity("sensor.b", "unavailable"),
+            self._make_entity("sensor.c", "10"),
+        ]
+        # "unavailable" can't be compared numerically - should be silently excluded
+        result = evaluate_cel_filter(entities, "state < 30")
+        assert len(result) == 2
+        entity_ids = [e["entity_id"] for e in result]
+        assert "sensor.a" in entity_ids
+        assert "sensor.c" in entity_ids
+        # "unavailable" entity should NOT be in results
+        assert "sensor.b" not in entity_ids
+
+    def test_cel_filter_invalid_expression(self):
+        """Invalid CEL expression returns error dict with parse error message."""
+        entities = [self._make_entity("light.a", "on")]
+        result = evaluate_cel_filter(entities, "invalid %%% expression")
+        assert isinstance(result, dict)
+        assert "error" in result
+
+    def test_cel_filter_no_expression(self):
+        """No expression returns all entities unfiltered."""
+        entities = [
+            self._make_entity("light.a", "on"),
+            self._make_entity("light.b", "off"),
+        ]
+        result = evaluate_cel_filter(entities, None)
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_cel_filter_domain_prefilter(self):
+        """Domain param narrows entity set before CEL evaluation."""
+        entities = [
+            self._make_entity("light.a", "on"),
+            self._make_entity("sensor.b", "on"),
+            self._make_entity("light.c", "off"),
+        ]
+        result = evaluate_cel_filter(entities, 'state == "on"', domain="light")
+        assert len(result) == 1
+        assert result[0]["entity_id"] == "light.a"
+
+    def test_cel_filter_empty_entities(self):
+        """Empty entity list returns empty list, no error."""
+        result = evaluate_cel_filter([], 'state == "on"')
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    def test_cel_filter_mixed_types(self):
+        """Entities with different state types in same query."""
+        entities = [
+            self._make_entity("sensor.temp", "72.5"),
+            self._make_entity("binary_sensor.door", "on"),
+            self._make_entity("sensor.battery", "25"),
+            self._make_entity("light.lamp", "off"),
+        ]
+        # String equality should work on all entity types
+        result = evaluate_cel_filter(entities, 'state == "on"')
+        assert len(result) == 1
+        assert result[0]["entity_id"] == "binary_sensor.door"
