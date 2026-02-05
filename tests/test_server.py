@@ -310,11 +310,11 @@ class TestMCPServer:
         """Test query_entities with domain filter only (no expression)."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
-            {"entity_id": "sensor.temp", "state": "72", "attributes": {"friendly_name": "Temperature"}},
-            {"entity_id": "light.kitchen", "state": "off", "attributes": {"friendly_name": "Kitchen", "brightness": 0}},
-        ]
+        mock_all_states = {
+            "light.living_room": {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
+            "sensor.temp": {"entity_id": "sensor.temp", "state": "72", "attributes": {"friendly_name": "Temperature"}},
+            "light.kitchen": {"entity_id": "light.kitchen", "state": "off", "attributes": {"friendly_name": "Kitchen", "brightness": 0}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(domain="light")
@@ -331,10 +331,10 @@ class TestMCPServer:
         """Test query_entities with CEL expression filtering."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
-            {"entity_id": "light.kitchen", "state": "off", "attributes": {"friendly_name": "Kitchen", "brightness": 0}},
-        ]
+        mock_all_states = {
+            "light.living_room": {"entity_id": "light.living_room", "state": "on", "attributes": {"friendly_name": "Living Room", "brightness": 255}},
+            "light.kitchen": {"entity_id": "light.kitchen", "state": "off", "attributes": {"friendly_name": "Kitchen", "brightness": 0}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(expression='state == "on"')
@@ -347,11 +347,11 @@ class TestMCPServer:
         """Test query_entities with numeric CEL expression."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "sensor.battery_a", "state": "25", "attributes": {"friendly_name": "Battery A", "device_class": "battery"}},
-            {"entity_id": "sensor.battery_b", "state": "80", "attributes": {"friendly_name": "Battery B", "device_class": "battery"}},
-            {"entity_id": "sensor.battery_c", "state": "10", "attributes": {"friendly_name": "Battery C", "device_class": "battery"}},
-        ]
+        mock_all_states = {
+            "sensor.battery_a": {"entity_id": "sensor.battery_a", "state": "25", "attributes": {"friendly_name": "Battery A", "device_class": "battery"}},
+            "sensor.battery_b": {"entity_id": "sensor.battery_b", "state": "80", "attributes": {"friendly_name": "Battery B", "device_class": "battery"}},
+            "sensor.battery_c": {"entity_id": "sensor.battery_c", "state": "10", "attributes": {"friendly_name": "Battery C", "device_class": "battery"}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(
@@ -369,11 +369,11 @@ class TestMCPServer:
         """Test query_entities with CEL OR logic."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "sensor.a", "state": "unavailable", "attributes": {"friendly_name": "A"}},
-            {"entity_id": "sensor.b", "state": "unknown", "attributes": {"friendly_name": "B"}},
-            {"entity_id": "sensor.c", "state": "42", "attributes": {"friendly_name": "C"}},
-        ]
+        mock_all_states = {
+            "sensor.a": {"entity_id": "sensor.a", "state": "unavailable", "attributes": {"friendly_name": "A"}},
+            "sensor.b": {"entity_id": "sensor.b", "state": "unknown", "attributes": {"friendly_name": "B"}},
+            "sensor.c": {"entity_id": "sensor.c", "state": "42", "attributes": {"friendly_name": "C"}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(
@@ -390,10 +390,10 @@ class TestMCPServer:
         """Test query_entities respects limit and reports total_matched."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": f"sensor.test_{i}", "state": str(i), "attributes": {"friendly_name": f"Test {i}"}}
+        mock_all_states = {
+            f"sensor.test_{i}": {"entity_id": f"sensor.test_{i}", "state": str(i), "attributes": {"friendly_name": f"Test {i}"}}
             for i in range(100)
-        ]
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(domain="sensor", limit=10)
@@ -408,8 +408,8 @@ class TestMCPServer:
         """Test lean output format includes domain-specific attributes."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {
+        mock_all_states = {
+            "light.test": {
                 "entity_id": "light.test",
                 "state": "on",
                 "attributes": {
@@ -420,7 +420,7 @@ class TestMCPServer:
                     "extra_attr": "should_not_appear"
                 }
             }
-        ]
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(domain="light", lean=True, compact=False)
@@ -437,8 +437,8 @@ class TestMCPServer:
         """Test compact output returns only entity_id, state, friendly_name."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {
+        mock_all_states = {
+            "light.test": {
                 "entity_id": "light.test",
                 "state": "on",
                 "attributes": {
@@ -447,7 +447,7 @@ class TestMCPServer:
                     "color_temp": 370
                 }
             }
-        ]
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(domain="light", compact=True)
@@ -464,9 +464,9 @@ class TestMCPServer:
         """Test query_entities with no matches returns count=0, empty entities."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.a", "state": "off", "attributes": {"friendly_name": "A"}},
-        ]
+        mock_all_states = {
+            "light.a": {"entity_id": "light.a", "state": "off", "attributes": {"friendly_name": "A"}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(expression='state == "on"')
@@ -482,9 +482,9 @@ class TestMCPServer:
         """Test query_entities with invalid CEL expression returns error."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.a", "state": "on", "attributes": {}},
-        ]
+        mock_all_states = {
+            "light.a": {"entity_id": "light.a", "state": "on", "attributes": {}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(expression="invalid %%% expression")
@@ -512,10 +512,10 @@ class TestMCPServer:
         """Test query_entities with no domain and no expression returns all entities up to limit."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.a", "state": "on", "attributes": {"friendly_name": "A"}},
-            {"entity_id": "sensor.b", "state": "42", "attributes": {"friendly_name": "B"}},
-        ]
+        mock_all_states = {
+            "light.a": {"entity_id": "light.a", "state": "on", "attributes": {"friendly_name": "A"}},
+            "sensor.b": {"entity_id": "sensor.b", "state": "42", "attributes": {"friendly_name": "B"}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities()
@@ -530,11 +530,11 @@ class TestMCPServer:
         """Test query_entities with both domain and expression combined."""
         from app.server import query_entities
 
-        mock_all_states = [
-            {"entity_id": "light.a", "state": "on", "attributes": {"friendly_name": "A"}},
-            {"entity_id": "light.b", "state": "off", "attributes": {"friendly_name": "B"}},
-            {"entity_id": "sensor.c", "state": "on", "attributes": {"friendly_name": "C"}},
-        ]
+        mock_all_states = {
+            "light.a": {"entity_id": "light.a", "state": "on", "attributes": {"friendly_name": "A"}},
+            "light.b": {"entity_id": "light.b", "state": "off", "attributes": {"friendly_name": "B"}},
+            "sensor.c": {"entity_id": "sensor.c", "state": "on", "attributes": {"friendly_name": "C"}},
+        }
 
         with patch("app.server.get_all_entity_states", new_callable=AsyncMock, return_value=mock_all_states):
             result = await query_entities(

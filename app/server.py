@@ -1835,8 +1835,11 @@ async def query_entities(
                 "error": all_states["error"]
             }
 
+        # Convert from {entity_id: entity_dict} to list for CEL filtering
+        entities_list = list(all_states.values())
+
         # Apply CEL filtering (handles domain pre-filter and expression)
-        filtered = evaluate_cel_filter(all_states, expression, domain=domain)
+        filtered = evaluate_cel_filter(entities_list, expression, domain=domain)
 
         # Handle CEL parse errors
         if isinstance(filtered, dict) and "error" in filtered:
