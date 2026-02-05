@@ -55,8 +55,8 @@ class TestMCPServer:
             "get_entity", 
             "list_entities",
             "entity_action",
-            "domain_summary_tool",  # Domain summaries tool
-            "call_service_tool",
+            "domain_summary",  # Domain summaries tool
+            "call_service",
             "restart_ha",
             "list_automations"
         ]
@@ -146,11 +146,11 @@ class TestMCPServer:
             "get_entity", 
             "list_entities",
             "entity_action",
-            "domain_summary_tool",
-            "call_service_tool",
+            "domain_summary",
+            "call_service",
             "restart_ha",
             "list_automations",
-            "search_entities_tool", 
+            "search_entities", 
             "system_overview",
             "get_error_log"
         ]
@@ -181,8 +181,8 @@ class TestMCPServer:
             
     @pytest.mark.asyncio
     async def test_search_entities_resource(self):
-        """Test the search_entities_tool function"""
-        from app.server import search_entities_tool
+        """Test the search_entities function"""
+        from app.server import search_entities
         
         # Mock the get_entities function with test data
         mock_entities = [
@@ -192,7 +192,7 @@ class TestMCPServer:
         
         with patch("app.server.get_entities", return_value=mock_entities) as mock_get:
             # Test search with a valid query
-            result = await search_entities_tool(query="living")
+            result = await search_entities(query="living")
             
             # Verify the function was called with the right parameters including lean format
             mock_get.assert_called_once_with(search_query="living", limit=20, lean=True)
@@ -207,29 +207,29 @@ class TestMCPServer:
             assert "light" in result["domains"]
             
             # Test with empty query (returns all entities instead of error)
-            result = await search_entities_tool(query="")
+            result = await search_entities(query="")
             assert "error" not in result
             assert result["count"] > 0
             assert "all entities (no filtering)" in result["query"]
             
             # Test that simplified representation includes domain-specific attributes
-            result = await search_entities_tool(query="living")
+            result = await search_entities(query="living")
             assert any("brightness" in e for e in result["results"])
             
             # Test with custom limit as an integer
             mock_get.reset_mock()
-            result = await search_entities_tool(query="light", limit=5)
+            result = await search_entities(query="light", limit=5)
             mock_get.assert_called_once_with(search_query="light", limit=5, lean=True)
             
             # Test with a different limit to ensure it's respected
             mock_get.reset_mock()
-            result = await search_entities_tool(query="light", limit=10)
+            result = await search_entities(query="light", limit=10)
             mock_get.assert_called_once_with(search_query="light", limit=10, lean=True)
             
     @pytest.mark.asyncio
-    async def test_domain_summary_tool(self):
-        """Test the domain_summary_tool function"""
-        from app.server import domain_summary_tool
+    async def test_domain_summary(self):
+        """Test the domain_summary function"""
+        from app.server import domain_summary
         
         # Mock the summarize_domain function
         mock_summary = {
@@ -245,7 +245,7 @@ class TestMCPServer:
         
         with patch("app.server.summarize_domain", return_value=mock_summary) as mock_summarize:
             # Test the function
-            result = await domain_summary_tool(domain="light", example_limit=3)
+            result = await domain_summary(domain="light", example_limit=3)
             
             # Verify the function was called with the right parameters
             mock_summarize.assert_called_once_with("light", 3)

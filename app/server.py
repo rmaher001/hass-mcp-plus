@@ -15,11 +15,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.hass import (
-    get_hass_version, get_entity_state, call_service, get_entities,
+    get_hass_version, get_entity_state,
+    call_service as hass_call_service,
+    get_entities,
     get_automations, restart_home_assistant,
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
     get_hass_error_log, get_entity_history, get_entity_history_range,
-    list_automation_traces, get_automation_trace,
+    list_automation_traces as hass_list_automation_traces,
+    get_automation_trace as hass_get_automation_trace,
     sanitize_for_logging, render_template,
     get_all_entity_states, evaluate_cel_filter,
     # Context flooding prevention constants
@@ -133,7 +136,7 @@ async def entity_action(entity_id: str, action: str, params: Optional[Dict[str, 
     data = {"entity_id": entity_id, **(params or {})}
     
     logger.info(f"Performing action '{action}' on entity: {entity_id} with params: {sanitize_for_logging(params)}")
-    return await call_service(domain, service, data)
+    return await hass_call_service(domain, service, data)
 
 @mcp.resource("hass://entities/{entity_id}")
 @async_handler("get_entity_resource")
@@ -273,7 +276,7 @@ async def list_entities(
         - Use compact=True when you need many entities but minimal detail
         - Use lean format (default) for most operations
         - Prefer domain filtering over no filtering
-        - For domain overviews, use domain_summary_tool instead of list_entities
+        - For domain overviews, use domain_summary instead of list_entities
         - Only request detailed=True when necessary for full attribute inspection
         - To get all entity types/domains, use list_entities without a domain filter,
           then extract domains from entity_ids
@@ -392,8 +395,8 @@ async def get_all_entities_resource() -> str:
     return result
 
 @mcp.tool()
-@async_handler("search_entities_tool")
-async def search_entities_tool(query: str, limit: int = 20) -> Dict[str, Any]:
+@async_handler("search_entities")
+async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
     """
     Search for entities matching a query string
     
@@ -637,11 +640,11 @@ async def search_entities_resource_with_limit(query: str, limit: str) -> str:
     
     return result
 
-# The domain_summary_tool is already implemented, no need to duplicate it
+# The domain_summary is already implemented, no need to duplicate it
 
 @mcp.tool()
 @async_handler("domain_summary")
-async def domain_summary_tool(domain: str, example_limit: int = 3) -> Dict[str, Any]:
+async def domain_summary(domain: str, example_limit: int = 3) -> Dict[str, Any]:
     """
     Get a summary of entities in a specific domain
     
@@ -683,7 +686,7 @@ async def system_overview() -> Dict[str, Any]:
     Best Practices:
         - Use this as the first call when exploring an unfamiliar Home Assistant instance
         - Perfect for building context about the structure of the smart home
-        - After getting an overview, use domain_summary_tool to dig deeper into specific domains
+        - After getting an overview, use domain_summary to dig deeper into specific domains
     """
     logger.info("Generating complete system overview")
     return await get_system_overview()
@@ -916,7 +919,7 @@ async def list_automations(limit: int = DEFAULT_AUTOMATION_LIMIT) -> Dict[str, A
 
 @mcp.tool()
 @async_handler("list_automation_traces")
-async def list_automation_traces_tool(
+async def list_automation_traces(
     automation_id: str,
     domain: str = "automation",
     limit: int = 10
@@ -946,12 +949,12 @@ async def list_automation_traces_tool(
         - 'state: running' means automation still executing
     """
     logger.info(f"Listing traces for automation: {automation_id}, limit: {limit}")
-    return await list_automation_traces(automation_id, domain, limit)
+    return await hass_list_automation_traces(automation_id, domain, limit)
 
 
 @mcp.tool()
 @async_handler("get_automation_trace")
-async def get_automation_trace_tool(
+async def get_automation_trace(
     automation_id: str,
     run_id: str,
     domain: str = "automation"
@@ -990,7 +993,7 @@ async def get_automation_trace_tool(
         - Examine 'error' fields for failure details
     """
     logger.info(f"Getting trace for automation: {automation_id}, run_id: {run_id}")
-    return await get_automation_trace(automation_id, run_id, domain)
+    return await hass_get_automation_trace(automation_id, run_id, domain)
 
 
 @mcp.tool()
@@ -1009,7 +1012,7 @@ async def restart_ha() -> Dict[str, Any]:
 
 @mcp.tool()
 @async_handler("call_service")
-async def call_service_tool(domain: str, service: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Call any Home Assistant service (low-level API access)
     
