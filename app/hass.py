@@ -8,6 +8,7 @@ import json
 import asyncio
 import ssl
 import websockets
+from cel import evaluate as cel_evaluate
 
 from app.config import HA_URL, HA_TOKEN, get_ha_headers
 
@@ -322,6 +323,96 @@ async def get_all_entity_states() -> Dict[str, Dict[str, Any]]:
     
     # Create a mapping for easier access
     return {entity["entity_id"]: entity for entity in entities}
+
+def _coerce_state(state_value: str) -> Union[int, float, str]:
+    """
+    Coerce a state string to a numeric type if possible.
+
+    Args:
+        state_value: The raw state string from Home Assistant
+
+    Returns:
+        int, float, or the original string if not numeric
+    """
+    try:
+        # Try int first (e.g., "25" -> 25)
+        return int(state_value)
+    except (ValueError, TypeError):
+        pass
+    try:
+        # Try float (e.g., "72.5" -> 72.5)
+        return float(state_value)
+    except (ValueError, TypeError):
+        pass
+    return state_value
+
+
+def evaluate_cel_filter(
+    entities: List[Dict[str, Any]],
+    expression: Optional[str],
+    domain: Optional[str] = None,
+) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Filter entities using a CEL (Common Expression Language) expression.
+
+    Each entity is evaluated against the expression with a context containing:
+    - entity_id: string
+    - state: numeric if possible, otherwise string
+    - domain: string (extracted from entity_id)
+    - attributes: dict of entity attributes
+
+    Args:
+        entities: List of entity dicts from HA /api/states
+        expression: CEL expression string, or None to return all
+        domain: Optional domain pre-filter (applied before CEL evaluation)
+
+    Returns:
+        List of matching entity dicts, or {"error": "..."} on CEL parse error
+    """
+    # Domain pre-filter
+    if domain:
+        entities = [e for e in entities if e["entity_id"].startswith(f"{domain}.")]
+
+    # No expression means return all (after domain filter)
+    if not expression:
+        return entities
+
+    # Validate expression by parsing it once with a dummy context
+    try:
+        cel_evaluate(expression, {
+            "entity_id": "",
+            "state": "",
+            "domain": "",
+            "attributes": {},
+        })
+    except ValueError as e:
+        error_msg = str(e)
+        if "parse" in error_msg.lower() or "syntax" in error_msg.lower():
+            return {"error": f"Invalid CEL expression: {error_msg}"}
+        # Execution errors on dummy data are fine - expression is syntactically valid
+
+    matched = []
+    for entity in entities:
+        entity_id = entity.get("entity_id", "")
+        raw_state = entity.get("state", "")
+        entity_domain = entity_id.split(".")[0] if entity_id else ""
+
+        context = {
+            "entity_id": entity_id,
+            "state": _coerce_state(raw_state),
+            "domain": entity_domain,
+            "attributes": entity.get("attributes", {}),
+        }
+
+        try:
+            if cel_evaluate(expression, context):
+                matched.append(entity)
+        except (ValueError, TypeError):
+            # Type mismatch (e.g., comparing "unavailable" < 30) - skip entity
+            continue
+
+    return matched
+
 
 def filter_fields(data: Dict[str, Any], fields: List[str]) -> Dict[str, Any]:
     """
