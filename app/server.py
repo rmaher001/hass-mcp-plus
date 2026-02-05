@@ -21,6 +21,7 @@ from app.hass import (
     get_hass_error_log, get_entity_history, get_entity_history_range,
     list_automation_traces, get_automation_trace,
     sanitize_for_logging, render_template,
+    get_all_entity_states, evaluate_cel_filter,
     # Context flooding prevention constants
     DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
     DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
@@ -1761,100 +1762,95 @@ async def get_error_log(
 @mcp.tool()
 @async_handler("query_entities")
 async def query_entities(
-    template: str,
+    domain: Optional[str] = None,
+    expression: Optional[str] = None,
     limit: int = 50,
     lean: bool = True,
     compact: bool = False
 ) -> Dict[str, Any]:
     """
-    Query entities using Home Assistant's Jinja2 template engine
+    Query entities using CEL (Common Expression Language) expressions
 
-    This tool leverages HA's powerful built-in template system for flexible
-    entity filtering. The template should return a list of entity state objects.
+    Fetches all entity states from Home Assistant and filters them
+    client-side using CEL expressions. Supports proper numeric comparison,
+    OR/AND/NOT logic, and nested attribute access.
 
     Args:
-        template: Jinja2 template that returns entity state objects
+        domain: Optional domain pre-filter (e.g., "sensor", "light", "cover")
+        expression: CEL expression for filtering entities
         limit: Maximum entities to return (default: 50)
         lean: Return minimal fields per entity with domain-specific attributes (default: True)
         compact: Return only entity_id, state, friendly_name (default: False)
 
-    Common Template Patterns:
+    CEL Expression Examples:
         Low battery sensors:
-            {{ states.sensor | selectattr('attributes.battery_level', 'defined')
-               | selectattr('attributes.battery_level', 'lt', 20) | list }}
+            domain="sensor", expression='state < 30 && attributes.device_class == "battery"'
 
         Lights that are on:
-            {{ states.light | selectattr('state', 'eq', 'on') | list }}
+            domain="light", expression='state == "on"'
 
-        Unavailable entities:
-            {{ states | selectattr('state', 'in', ['unavailable', 'unknown']) | list }}
+        Unavailable OR unknown entities:
+            expression='state == "unavailable" || state == "unknown"'
 
-        Entities in an area:
-            {{ area_entities('garage') | map('states') | list }}
+        NOT closed covers:
+            domain="cover", expression='state != "closed"'
 
-        Entities by label:
-            {{ label_entities('critical') | map('states') | list }}
+        Temperature sensors above 80 OR below 32:
+            domain="sensor",
+            expression='attributes.device_class == "temperature" && (state > 80 || state < 32)'
 
-        Temperature sensors above 75:
-            {{ states.sensor | selectattr('attributes.device_class', 'eq', 'temperature')
-               | selectattr('state', 'gt', '75') | list }}
+        Lights on and dim:
+            domain="light", expression='state == "on" && attributes.brightness < 50'
 
-        Recently changed (last 5 min):
-            {{ states | selectattr('last_changed', 'gt', now() - timedelta(minutes=5)) | list }}
-
-        Regex match on entity_id:
-            {{ states.sensor | selectattr('entity_id', 'match', '.*_temperature$') | list }}
-
-        Compound filters (AND):
-            {{ states.light | selectattr('state', 'eq', 'on')
-               | selectattr('attributes.brightness', 'gt', 100) | list }}
+    CEL Context Per Entity:
+        - entity_id: string (e.g., "sensor.battery_level")
+        - state: numeric if possible, otherwise string
+        - domain: string (e.g., "sensor")
+        - attributes: dict with all entity attributes
 
     Returns:
         Dictionary containing:
         - count: Number of entities returned
         - total_matched: Total entities matching (before limit)
         - truncated: Whether results were limited
-        - template: The template that was executed
         - entities: List of matching entities
-        - error: Error message if template failed
-
-    Note: Template must return a list of state objects. Use | list at the end.
+        - error: Error message if expression is invalid or API fails
     """
-    logger.info("Querying entities with template")
+    logger.info(f"Querying entities with domain={domain}, expression={expression}")
 
     try:
-        result = await render_template(template)
+        # Fetch all entity states from HA
+        all_states = await get_all_entity_states()
 
-        # Handle errors
-        if isinstance(result, dict) and "error" in result:
+        # Handle API errors
+        if isinstance(all_states, dict) and "error" in all_states:
             return {
                 "count": 0,
                 "total_matched": 0,
                 "truncated": False,
-                "template": template,
                 "entities": [],
-                "error": result["error"]
+                "error": all_states["error"]
             }
 
-        # Handle non-list results
-        if not isinstance(result, list):
+        # Apply CEL filtering (handles domain pre-filter and expression)
+        filtered = evaluate_cel_filter(all_states, expression, domain=domain)
+
+        # Handle CEL parse errors
+        if isinstance(filtered, dict) and "error" in filtered:
             return {
                 "count": 0,
                 "total_matched": 0,
                 "truncated": False,
-                "template": template,
                 "entities": [],
-                "error": f"Template must return a list, got {type(result).__name__}. "
-                         f"Make sure to use '| list' at the end of your template."
+                "error": filtered["error"]
             }
 
-        total_matched = len(result)
+        total_matched = len(filtered)
         truncated = total_matched > limit
-        entities = result[:limit]
+        entities = filtered[:limit]
 
         # Apply output formatting
         if compact:
-            # Compact mode: only entity_id, state, friendly_name
             entities = [
                 {
                     "entity_id": e.get("entity_id"),
@@ -1864,19 +1860,17 @@ async def query_entities(
                 for e in entities
             ]
         elif lean:
-            # Lean mode: domain-specific important attributes
             formatted = []
             for entity in entities:
                 entity_id = entity.get("entity_id", "")
-                domain = entity_id.split(".")[0] if entity_id else ""
+                ent_domain = entity_id.split(".")[0] if entity_id else ""
                 lean_entity = {
                     "entity_id": entity_id,
                     "state": entity.get("state"),
                     "friendly_name": entity.get("attributes", {}).get("friendly_name")
                 }
-                # Add domain-specific attributes
                 attrs = entity.get("attributes", {})
-                important_attrs = DOMAIN_IMPORTANT_ATTRIBUTES.get(domain, [])
+                important_attrs = DOMAIN_IMPORTANT_ATTRIBUTES.get(ent_domain, [])
                 for attr in important_attrs:
                     if attr in attrs:
                         lean_entity[attr] = attrs[attr]
@@ -1887,7 +1881,6 @@ async def query_entities(
             "count": len(entities),
             "total_matched": total_matched,
             "truncated": truncated,
-            "template": template,
             "entities": entities
         }
 
@@ -1897,7 +1890,6 @@ async def query_entities(
             "count": 0,
             "total_matched": 0,
             "truncated": False,
-            "template": template,
             "entities": [],
-            "error": f"Error processing template result: {str(e)}"
+            "error": f"Error querying entities: {str(e)}"
         }
