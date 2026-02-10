@@ -10,7 +10,7 @@ import ssl
 import websockets
 from cel import evaluate as cel_evaluate
 
-from app.config import HA_URL, HA_TOKEN, get_ha_headers
+from app.config import HA_URL, HA_TOKEN, HA_VERIFY_SSL, get_ha_headers
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -133,7 +133,16 @@ def handle_api_errors(func: F) -> F:
             
             # Call the original function
             return await func(*args, **kwargs)
-        except httpx.ConnectError:
+        except httpx.ConnectError as e:
+            # Walk the exception chain to find SSL errors
+            cause = e.__cause__
+            while cause is not None:
+                if isinstance(cause, ssl.SSLError):
+                    return format_error(
+                        f"SSL certificate error connecting to Home Assistant at {HA_URL}: {cause}. "
+                        f"If using a self-signed certificate, set HA_VERIFY_SSL=false"
+                    )
+                cause = getattr(cause, "__cause__", None) or getattr(cause, "__context__", None)
             return format_error(f"Connection error: Cannot connect to Home Assistant at {HA_URL}")
         except httpx.TimeoutException:
             return format_error(f"Timeout error: Home Assistant at {HA_URL} did not respond in time")
@@ -207,7 +216,7 @@ async def get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
         logger.debug("Creating new HTTP client")
-        _client = httpx.AsyncClient(timeout=_timeout_config)
+        _client = httpx.AsyncClient(timeout=_timeout_config, verify=HA_VERIFY_SSL)
     return _client
 
 async def cleanup_client() -> None:
@@ -237,7 +246,9 @@ async def call_websocket_api(message_type: str, **kwargs) -> Dict[str, Any]:
     ssl_context = None
     if ws_url.startswith("wss://"):
         ssl_context = ssl.create_default_context()
-        # Validates certificates by default - no need for explicit verify_mode
+        if not HA_VERIFY_SSL:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
 
     try:
         # Apply rate limiting before making connection

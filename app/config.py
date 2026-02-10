@@ -17,6 +17,27 @@ _PLACEHOLDER_TOKENS = [
 ]
 
 
+def _parse_bool_env(value: str) -> bool:
+    """Parse a boolean from an environment variable string.
+
+    Accepts true/1/yes (case-insensitive) as True; everything else is False.
+    """
+    return value.strip().lower() in ("true", "1", "yes")
+
+
+def _validate_ha_verify_ssl(raw: str) -> bool:
+    """Parse and validate the HA_VERIFY_SSL setting."""
+    verify = _parse_bool_env(raw)
+    if not verify:
+        logger.warning(
+            "SSL certificate verification is disabled (HA_VERIFY_SSL=false). "
+            "Connections to Home Assistant will not validate certificates."
+        )
+    else:
+        logger.info("SSL certificate verification is enabled")
+    return verify
+
+
 def _validate_ha_url(url: str) -> str:
     """Validate Home Assistant URL format and log warnings."""
     if not url:
@@ -59,6 +80,7 @@ def _validate_ha_token(token: str) -> str:
 # Home Assistant configuration with validation
 HA_URL: str = _validate_ha_url(os.environ.get("HA_URL", "http://localhost:8123"))
 HA_TOKEN: str = _validate_ha_token(os.environ.get("HA_TOKEN", ""))
+HA_VERIFY_SSL: bool = _validate_ha_verify_ssl(os.environ.get("HA_VERIFY_SSL", "false"))
 
 def get_ha_headers() -> dict:
     """Return the headers needed for Home Assistant API requests"""

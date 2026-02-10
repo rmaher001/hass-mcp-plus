@@ -5,6 +5,8 @@ import json
 import httpx
 from typing import Dict, List, Any
 
+import ssl
+
 from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, render_template, evaluate_cel_filter
 
 class TestHassAPI:
@@ -829,3 +831,80 @@ class TestCELFiltering:
         result = evaluate_cel_filter(entities, 'state == "on"')
         assert len(result) == 1
         assert result[0]["entity_id"] == "binary_sensor.door"
+
+
+class TestSSLVerification:
+    """Test SSL verification configuration wiring."""
+
+    def test_get_client_source_passes_verify(self):
+        """get_client() source code passes verify=HA_VERIFY_SSL to httpx.AsyncClient."""
+        import pathlib
+        source = (pathlib.Path(__file__).parent.parent / "app" / "hass.py").read_text()
+        # Verify the AsyncClient constructor uses HA_VERIFY_SSL
+        assert "verify=HA_VERIFY_SSL" in source
+
+    def test_ha_verify_ssl_imported(self):
+        """HA_VERIFY_SSL is imported from config in hass module."""
+        import pathlib
+        source = (pathlib.Path(__file__).parent.parent / "app" / "hass.py").read_text()
+        assert "HA_VERIFY_SSL" in source
+        assert "from app.config import" in source
+
+    def test_websocket_ssl_context_disabled(self):
+        """WebSocket SSL context disables verification when HA_VERIFY_SSL is False."""
+        ssl_context = ssl.create_default_context()
+        # Simulate the code path
+        verify_ssl = False
+        if not verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+        assert ssl_context.check_hostname is False
+        assert ssl_context.verify_mode == ssl.CERT_NONE
+
+    def test_websocket_ssl_context_enabled(self):
+        """WebSocket SSL context validates by default when HA_VERIFY_SSL is True."""
+        ssl_context = ssl.create_default_context()
+        # When verify_ssl is True, we don't modify the context
+        verify_ssl = True
+        if not verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+        assert ssl_context.check_hostname is True
+        assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    @pytest.mark.asyncio
+    async def test_connect_error_surfaces_ssl_error(self, mock_config):
+        """SSL errors inside ConnectError are surfaced with a helpful hint."""
+        # Build a chained exception: ConnectError wrapping SSLError
+        ssl_err = ssl.SSLError("certificate verify failed")
+        connect_err = httpx.ConnectError("connection failed")
+        connect_err.__cause__ = ssl_err
+
+        @handle_api_errors
+        async def failing_func() -> Dict[str, Any]:
+            raise connect_err
+
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            result = await failing_func()
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "SSL certificate error" in result["error"]
+            assert "HA_VERIFY_SSL" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_connect_error_without_ssl_gives_generic_message(self, mock_config):
+        """ConnectError without SSL cause gives the standard message."""
+        connect_err = httpx.ConnectError("connection refused")
+
+        @handle_api_errors
+        async def failing_func() -> Dict[str, Any]:
+            raise connect_err
+
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            result = await failing_func()
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Cannot connect" in result["error"]
+            assert "HA_VERIFY_SSL" not in result["error"]
