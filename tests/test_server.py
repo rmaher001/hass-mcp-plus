@@ -111,7 +111,7 @@ class TestMCPServer:
             assert isinstance(result, dict)
             assert result["automations"] == []
             assert "error" in result
-            assert "Unexpected error" in result["error"]
+            assert result["error"] == "Error listing automations"
 
             # Case 3: Test with successful response (new dict format)
             mock_automations = {

@@ -40,11 +40,26 @@ def mock_httpx_client():
     with patch('httpx.AsyncClient', return_value=mock_client):
         yield mock_client
 
-# Patch app.hass.get_client
+# Patch get_client in every submodule that imports it
+# (patching app.hass.get_client only patches the re-export in __init__.py)
+_GET_CLIENT_MODULES = [
+    'app.hass.entities',
+    'app.hass.services',
+    'app.hass.history',
+    'app.hass.logging_ha',
+    'app.hass.summary',
+    'app.hass.templates',
+]
+
 @pytest.fixture(autouse=True)
 def mock_get_client(mock_httpx_client):
-    """Mock the get_client function to return our mock client."""
-    with patch('app.hass.get_client', return_value=mock_httpx_client):
+    """Mock the get_client function in all submodules that use it."""
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        for mod in _GET_CLIENT_MODULES:
+            stack.enter_context(patch(f'{mod}.get_client', return_value=mock_httpx_client))
+        # Also keep the __init__.py re-export patched for any code using it
+        stack.enter_context(patch('app.hass.get_client', return_value=mock_httpx_client))
         yield mock_httpx_client
 
 # Mock HA session

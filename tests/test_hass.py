@@ -22,27 +22,27 @@ class TestHassAPI:
             {"entity_id": "light.living_room", "state": "on", "attributes": {"brightness": 255}},
             {"entity_id": "switch.kitchen", "state": "off", "attributes": {}}
         ]
-        
+
         # Create mock response
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = mock_states
-        
+
         # Create properly awaitable mock
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        
+
         # Setup client mocking
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                             # Test function
                             states = await get_entities()
-                            
+
                             # Assertions
                             assert isinstance(states, list)
                             assert len(states) == 2
-                            
+
                             # Verify API was called correctly
                             mock_client.get.assert_called_once()
                             called_url = mock_client.get.call_args[0][0]
@@ -64,17 +64,17 @@ class TestHassAPI:
         mock_client.get = AsyncMock(return_value=mock_response)
         
         # Patch the client
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     # Test function - use_cache parameter has been removed
                     state = await get_entity_state("light.living_room")
-                    
+
                     # Assertions
                     assert isinstance(state, dict)
                     assert state["entity_id"] == "light.living_room"
                     assert state["state"] == "on"
-                    
+
                     # Verify API was called correctly
                     mock_client.get.assert_called_once()
                     called_url = mock_client.get.call_args[0][0]
@@ -97,9 +97,9 @@ class TestHassAPI:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         # Patch the client
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.services.get_client', return_value=mock_client):
+            with patch('app.hass.services.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                         # Test function
                         result = await call_service(domain, service, data)
 
@@ -131,9 +131,9 @@ class TestHassAPI:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         # Patch the client
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.services.get_client', return_value=mock_client):
+            with patch('app.hass.services.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                         # Test function
                         result = await call_service(domain, service, data)
 
@@ -163,9 +163,9 @@ class TestHassAPI:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         # Patch the client
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.services.get_client', return_value=mock_client):
+            with patch('app.hass.services.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                         # Test function
                         result = await call_service(domain, service, data)
 
@@ -202,10 +202,10 @@ class TestHassAPI:
         ]
 
         # Patch the token to avoid the "No token" error
-        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            with patch('app.hass.decorators.HA_URL', mock_config["hass_url"]):
                 # For get_automations we need to mock the get_entities function
-                with patch('app.hass.get_entities', AsyncMock(return_value=mock_automation_states)):
+                with patch('app.hass.automations.get_entities', AsyncMock(return_value=mock_automation_states)):
                     # Test function
                     result = await get_automations()
 
@@ -229,7 +229,7 @@ class TestHassAPI:
                     assert automations[0]["last_triggered"] == "2025-03-15T07:00:00Z"
 
                 # Test error response
-                with patch('app.hass.get_entities', AsyncMock(return_value={"error": "HTTP error: 404 - Not Found"})):
+                with patch('app.hass.automations.get_entities', AsyncMock(return_value={"error": "HTTP error: 404 - Not Found"})):
                     # Test function with error
                     result = await get_automations()
 
@@ -270,9 +270,9 @@ class TestHassAPI:
         mock_client.get = AsyncMock(return_value=mock_response)
 
         # Patch the client and HA_URL/HA_TOKEN
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.history.get_client', return_value=mock_client):
+            with patch('app.hass.history.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     from app.hass import get_entity_history
                     result = await get_entity_history(entity_id, hours)
 
@@ -359,9 +359,9 @@ class TestContextFloodingPrevention:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     from app.hass import get_entities
                     entities = await get_entities(compact=True)
 
@@ -387,9 +387,9 @@ class TestContextFloodingPrevention:
             for i in range(100)  # Create 100 automations
         ]
 
-        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.get_entities', AsyncMock(return_value=mock_automation_states)):
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            with patch('app.hass.decorators.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.automations.get_entities', AsyncMock(return_value=mock_automation_states)):
                     from app.hass import get_automations
                     result = await get_automations(limit=10)
 
@@ -424,9 +424,9 @@ class TestContextFloodingPrevention:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.history.get_client', return_value=mock_client):
+            with patch('app.hass.history.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     from app.hass import get_entity_history
                     result = await get_entity_history("sensor.test", hours=24, limit=50)
 
@@ -541,8 +541,8 @@ class TestContextFloodingPrevention:
             }
         ]
 
-        with patch('app.hass.call_websocket_api', AsyncMock(return_value=mock_records)):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_websocket_api', AsyncMock(return_value=mock_records)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 from app.hass import get_hass_error_log
 
                 # Test with integration filter
@@ -579,9 +579,9 @@ class TestContextFloodingPrevention:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.history.get_client', return_value=mock_client):
+            with patch('app.hass.history.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     from app.hass import get_entity_history_range
                     result = await get_entity_history_range(
                         "light.test",
@@ -612,9 +612,9 @@ class TestRenderTemplate:
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.templates.get_client', return_value=mock_client):
+            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     result = await render_template("{{ states.light | list }}")
 
                     # Should parse as JSON list
@@ -640,9 +640,9 @@ class TestRenderTemplate:
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.templates.get_client', return_value=mock_client):
+            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     result = await render_template("{{ 'Hello World' }}")
 
                     # Should return as string (not JSON parseable)
@@ -659,9 +659,9 @@ class TestRenderTemplate:
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.templates.get_client', return_value=mock_client):
+            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     result = await render_template("{{ invalid_var }}")
 
                     # Should return error dict
@@ -679,9 +679,9 @@ class TestRenderTemplate:
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.templates.get_client', return_value=mock_client):
+            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                     result = await render_template("{{ states.nonexistent | list }}")
 
                     # Should return empty list
@@ -841,16 +841,21 @@ class TestSSLVerification:
     def test_get_client_source_passes_verify(self):
         """get_client() source code passes verify=HA_VERIFY_SSL to httpx.AsyncClient."""
         import pathlib
-        source = (pathlib.Path(__file__).parent.parent / "app" / "hass.py").read_text()
+        hass_dir = pathlib.Path(__file__).parent.parent / "app" / "hass"
+        # Search across all files in the hass package
+        sources = [f.read_text() for f in hass_dir.glob("*.py")]
+        combined = "\n".join(sources)
         # Verify the AsyncClient constructor uses HA_VERIFY_SSL
-        assert "verify=HA_VERIFY_SSL" in source
+        assert "verify=HA_VERIFY_SSL" in combined
 
     def test_ha_verify_ssl_imported(self):
         """HA_VERIFY_SSL is imported from config in hass module."""
         import pathlib
-        source = (pathlib.Path(__file__).parent.parent / "app" / "hass.py").read_text()
-        assert "HA_VERIFY_SSL" in source
-        assert "from app.config import" in source
+        hass_dir = pathlib.Path(__file__).parent.parent / "app" / "hass"
+        sources = [f.read_text() for f in hass_dir.glob("*.py")]
+        combined = "\n".join(sources)
+        assert "HA_VERIFY_SSL" in combined
+        assert "from app.config import" in combined
 
     def test_websocket_ssl_context_disabled(self):
         """WebSocket SSL context disables verification when HA_VERIFY_SSL is False."""
@@ -888,7 +893,7 @@ class TestSSLVerification:
         async def failing_func() -> Dict[str, Any]:
             raise connect_err
 
-        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
             result = await failing_func()
             assert isinstance(result, dict)
             assert "error" in result
@@ -904,7 +909,7 @@ class TestSSLVerification:
         async def failing_func() -> Dict[str, Any]:
             raise connect_err
 
-        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
             result = await failing_func()
             assert isinstance(result, dict)
             assert "error" in result
@@ -1031,9 +1036,8 @@ class TestFetchLogText:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.get_client', return_value=mock_client):
+            with patch('app.hass.logging_ha.HA_URL', mock_config["hass_url"]):
                     text, source = await _fetch_log_text(lines=100)
                     assert "Started" in text
                     assert source == "supervisor"
@@ -1056,9 +1060,8 @@ class TestFetchLogText:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(side_effect=[mock_supervisor_response, mock_fallback_response])
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.get_client', return_value=mock_client):
+            with patch('app.hass.logging_ha.HA_URL', mock_config["hass_url"]):
                     text, source = await _fetch_log_text(lines=100)
                     assert "Error occurred" in text
                     assert source == "error_log"
@@ -1075,9 +1078,8 @@ class TestFetchLogText:
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        with patch('app.hass.get_client', return_value=mock_client):
-            with patch('app.hass.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.get_client', return_value=mock_client):
+            with patch('app.hass.logging_ha.HA_URL', mock_config["hass_url"]):
                     text, source = await _fetch_log_text(lines=100)
                     assert text == ""
                     assert source == "none"
@@ -1097,8 +1099,8 @@ class TestGetHassCoreLog:
             "2026-02-10 10:00:02.000 INFO (MainThread) [homeassistant.core] Bus ready\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs()
 
                 assert isinstance(result, dict)
@@ -1120,8 +1122,8 @@ class TestGetHassCoreLog:
             "2026-02-10 10:00:02.000 DEBUG (MainThread) [homeassistant.core] Dbg\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(level="ERROR")
                 assert result["count"] == 1
                 assert result["records"][0]["level"] == "ERROR"
@@ -1137,8 +1139,8 @@ class TestGetHassCoreLog:
             "2026-02-10 10:00:02.000 DEBUG (MainThread) [custom_components.llmvision] LLM debug\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(integration="mqtt")
                 assert result["count"] == 1
                 assert result["records"][0]["integration"] == "mqtt"
@@ -1159,8 +1161,8 @@ class TestGetHassCoreLog:
             "2026-02-10 10:00:02.000 ERROR (MainThread) [homeassistant.core] Connection refused\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(pattern="Connection")
                 assert result["count"] == 2
 
@@ -1178,8 +1180,8 @@ class TestGetHassCoreLog:
             f"{recent} ERROR (MainThread) [homeassistant.core] Recent error\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(since_minutes=30)
                 assert result["count"] == 1
                 assert "Recent error" in result["records"][0]["message"]
@@ -1195,8 +1197,8 @@ class TestGetHassCoreLog:
             lines.append(f"2026-02-10 10:{i//60:02d}:{i%60:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
         raw_log = "\n".join(lines) + "\n"
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs()
                 assert result["count"] <= 50
                 assert result["total_parsed"] == 100
@@ -1212,8 +1214,8 @@ class TestGetHassCoreLog:
             lines.append(f"2026-02-10 10:00:{i:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
         raw_log = "\n".join(lines) + "\n"
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(limit=5)
                 assert result["count"] == 5
 
@@ -1225,8 +1227,8 @@ class TestGetHassCoreLog:
         long_msg = "A" * 1000
         raw_log = f"2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] {long_msg}\n"
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs()
                 msg = result["records"][0]["message"]
                 assert len(msg) <= 520  # 500 + "... [truncated]" suffix
@@ -1248,8 +1250,8 @@ class TestGetHassCoreLog:
             "ValueError: bad\n"
         )
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(truncate_traces=True)
                 msg = result["records"][0]["message"]
                 # Should have the main message plus truncated trace
@@ -1265,8 +1267,8 @@ class TestGetHassCoreLog:
             lines.append(f"2026-02-10 10:00:{i:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
         raw_log = "\n".join(lines) + "\n"
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs(limit=3)
                 # Should have the last 3 records
                 assert result["count"] == 3
@@ -1278,8 +1280,8 @@ class TestGetHassCoreLog:
         """When log fetch fails, returns error dict."""
         from app.hass import get_hass_core_logs
 
-        with patch('app.hass._fetch_log_text', AsyncMock(return_value=("", "none"))):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha._fetch_log_text', AsyncMock(return_value=("", "none"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await get_hass_core_logs()
                 assert "error" in result
 
@@ -1292,8 +1294,8 @@ class TestSetHassLogLevel:
         """Set integration to debug level via logger.set_level service."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await set_hass_log_level("llmvision", "debug")
                 assert result["success"] is True
                 assert result["integration"] == "llmvision"
@@ -1310,8 +1312,8 @@ class TestSetHassLogLevel:
         """Set integration to warning level."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await set_hass_log_level("mqtt", "warning")
                 assert result["success"] is True
                 assert result["level"] == "warning"
@@ -1321,7 +1323,7 @@ class TestSetHassLogLevel:
         """Invalid log level returns error."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
             result = await set_hass_log_level("mqtt", "CRITICAL")
             assert "error" in result
 
@@ -1330,8 +1332,8 @@ class TestSetHassLogLevel:
         """Custom component logger gets custom_components prefix."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await set_hass_log_level("llmvision", "debug", custom_component=True)
                 assert result["success"] is True
 
@@ -1344,8 +1346,8 @@ class TestSetHassLogLevel:
         """Standard integration logger gets homeassistant.components prefix."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await set_hass_log_level("mqtt", "debug", custom_component=False)
                 assert result["success"] is True
 
@@ -1357,7 +1359,302 @@ class TestSetHassLogLevel:
         """Service call failure returns error."""
         from app.hass import set_hass_log_level
 
-        with patch('app.hass.call_service', AsyncMock(return_value={"error": "Service failed"})):
-            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+        with patch('app.hass.logging_ha.call_service', AsyncMock(return_value={"error": "Service failed"})):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
                 result = await set_hass_log_level("mqtt", "debug")
                 assert "error" in result
+
+
+# ============================================================================
+# Input Validation Tests
+# ============================================================================
+
+class TestValidation:
+    """Test input validation functions."""
+
+    # --- Entity ID Validation ---
+
+    def test_validate_entity_id_valid(self):
+        from app.hass.validation import validate_entity_id
+        assert validate_entity_id("light.living_room") == "light.living_room"
+        assert validate_entity_id("sensor.temperature_1") == "sensor.temperature_1"
+        assert validate_entity_id("binary_sensor.front_door") == "binary_sensor.front_door"
+        assert validate_entity_id("sensor.0x00158d000123_temp") == "sensor.0x00158d000123_temp"
+
+    def test_validate_entity_id_invalid(self):
+        from app.hass.validation import validate_entity_id, ValidationError
+        # Path traversal
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("../../etc/passwd")
+        # Missing dot separator
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light")
+        # Query injection
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light.test?foo=bar")
+        # Slash in entity_id
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light/test")
+        # Newline injection
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light.test\nHost: evil.com")
+        # Empty string
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_entity_id("")
+        # None
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_entity_id(None)
+        # Space in entity_id
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light.living room")
+        # Uppercase rejected (HA normalizes to lowercase)
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("Light.living_room")
+        with pytest.raises(ValidationError, match="Invalid entity ID"):
+            validate_entity_id("light.Living_Room")
+
+    # --- HA Identifier Validation ---
+
+    def test_validate_ha_identifier_valid(self):
+        from app.hass.validation import validate_ha_identifier
+        assert validate_ha_identifier("light", "domain") == "light"
+        assert validate_ha_identifier("turn_on", "service") == "turn_on"
+        assert validate_ha_identifier("binary_sensor", "domain") == "binary_sensor"
+        assert validate_ha_identifier("media_player", "domain") == "media_player"
+
+    def test_validate_ha_identifier_invalid(self):
+        from app.hass.validation import validate_ha_identifier, ValidationError
+        # Path traversal
+        with pytest.raises(ValidationError, match="Invalid domain"):
+            validate_ha_identifier("../etc", "domain")
+        # Slash
+        with pytest.raises(ValidationError, match="Invalid service"):
+            validate_ha_identifier("turn/on", "service")
+        # Uppercase (HA identifiers are lowercase)
+        with pytest.raises(ValidationError, match="Invalid domain"):
+            validate_ha_identifier("Light", "domain")
+        # Empty
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_ha_identifier("", "domain")
+        # Special characters
+        with pytest.raises(ValidationError, match="Invalid domain"):
+            validate_ha_identifier("light;drop", "domain")
+
+    # --- Automation ID Validation ---
+
+    def test_validate_automation_id_valid(self):
+        from app.hass.validation import validate_automation_id
+        assert validate_automation_id("motion_light") == "motion_light"
+        assert validate_automation_id("bedtime-routine") == "bedtime-routine"
+        assert validate_automation_id("automation123") == "automation123"
+
+    def test_validate_automation_id_invalid(self):
+        from app.hass.validation import validate_automation_id, ValidationError
+        with pytest.raises(ValidationError, match="Invalid automation ID"):
+            validate_automation_id("../../../etc")
+        with pytest.raises(ValidationError, match="Invalid automation ID"):
+            validate_automation_id("test;rm -rf")
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_automation_id("")
+
+    # --- Run ID Validation ---
+
+    def test_validate_run_id_valid(self):
+        from app.hass.validation import validate_run_id
+        assert validate_run_id("1700000000.123456") == "1700000000.123456"
+        assert validate_run_id("abc-123_def") == "abc-123_def"
+
+    def test_validate_run_id_invalid(self):
+        from app.hass.validation import validate_run_id, ValidationError
+        with pytest.raises(ValidationError, match="Invalid run ID"):
+            validate_run_id("run;id")
+        with pytest.raises(ValidationError, match="Invalid run ID"):
+            validate_run_id("../../etc/passwd")
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_run_id("")
+
+    # --- Trace Domain Validation ---
+
+    def test_validate_trace_domain_valid(self):
+        from app.hass.validation import validate_trace_domain
+        assert validate_trace_domain("automation") == "automation"
+        assert validate_trace_domain("script") == "script"
+
+    def test_validate_trace_domain_invalid(self):
+        from app.hass.validation import validate_trace_domain, ValidationError
+        with pytest.raises(ValidationError, match="Invalid trace domain"):
+            validate_trace_domain("light")
+        with pytest.raises(ValidationError, match="Invalid trace domain"):
+            validate_trace_domain("../evil")
+
+    # --- Service Payload Validation ---
+
+    def test_validate_service_payload_valid(self):
+        from app.hass.validation import validate_service_payload
+        assert validate_service_payload(None) is None
+        assert validate_service_payload({}) == {}
+        assert validate_service_payload({"entity_id": "light.test"}) == {"entity_id": "light.test"}
+
+    def test_validate_service_payload_too_large(self):
+        from app.hass.validation import validate_service_payload, ValidationError
+        # Create payload larger than 1 MB
+        large_data = {"data": "x" * 1_100_000}
+        with pytest.raises(ValidationError, match="too large"):
+            validate_service_payload(large_data)
+
+    def test_validate_service_payload_not_serializable(self):
+        from app.hass.validation import validate_service_payload, ValidationError
+        with pytest.raises(ValidationError, match="JSON-serializable"):
+            validate_service_payload({"func": lambda x: x})
+
+    # --- Template Validation ---
+
+    def test_validate_template_valid(self):
+        from app.hass.validation import validate_template
+        assert validate_template("{{ states.light.test.state }}") == "{{ states.light.test.state }}"
+
+    def test_validate_template_too_large(self):
+        from app.hass.validation import validate_template, ValidationError
+        with pytest.raises(ValidationError, match="too large"):
+            validate_template("x" * 70_000)
+
+    def test_validate_template_empty(self):
+        from app.hass.validation import validate_template, ValidationError
+        with pytest.raises(ValidationError, match="non-empty"):
+            validate_template("")
+
+    # --- URL Path Encoding ---
+
+    def test_safe_url_path_segment(self):
+        from app.hass.validation import safe_url_path_segment
+        # Normal entity_id preserves dots (unreserved in RFC 3986)
+        assert safe_url_path_segment("light.living_room") == "light.living_room"
+        # Slashes are encoded
+        assert safe_url_path_segment("../etc/passwd") == "..%2Fetc%2Fpasswd"
+        # Question marks are encoded
+        assert safe_url_path_segment("test?foo=bar") == "test%3Ffoo%3Dbar"
+
+
+class TestSecurityIntegration:
+    """Test that security validation is integrated into API functions."""
+
+    @pytest.mark.asyncio
+    async def test_get_entity_state_validates_entity_id(self, mock_config):
+        """Entity state function rejects invalid entity IDs."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await get_entity_state("../../etc/passwd")
+            assert "error" in result
+            assert "Invalid entity ID" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_get_entity_state_url_encodes_path(self, mock_config):
+        """Entity state function URL-encodes the entity_id in the path."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "entity_id": "light.living_room",
+            "state": "on",
+            "attributes": {}
+        }
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                    await get_entity_state("light.living_room")
+                    called_url = mock_client.get.call_args[0][0]
+                    # Dot preserved, entity_id in path
+                    assert called_url == f"{mock_config['hass_url']}/api/states/light.living_room"
+
+    @pytest.mark.asyncio
+    async def test_call_service_validates_domain(self, mock_config):
+        """Service call rejects invalid domain names."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await call_service("../evil", "turn_on", {})
+            assert "error" in result
+            assert "Invalid domain" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_call_service_validates_service(self, mock_config):
+        """Service call rejects invalid service names."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await call_service("light", "turn/on", {})
+            assert "error" in result
+            assert "Invalid service" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_call_service_validates_payload_size(self, mock_config):
+        """Service call rejects oversized payloads."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            large_data = {"data": "x" * 1_100_000}
+            result = await call_service("light", "turn_on", large_data)
+            assert "error" in result
+            assert "too large" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_call_service_url_encodes_path(self, mock_config):
+        """Service call URL-encodes domain and service in the path."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {}
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.services.get_client', return_value=mock_client):
+            with patch('app.hass.services.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                    await call_service("light", "turn_on", {"entity_id": "light.test"})
+                    called_url = mock_client.post.call_args[0][0]
+                    assert called_url == f"{mock_config['hass_url']}/api/services/light/turn_on"
+
+    @pytest.mark.asyncio
+    async def test_render_template_validates_size(self, mock_config):
+        """Template rendering rejects oversized templates."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await render_template("x" * 70_000)
+            # render_template returns Any, so error is a plain string
+            assert isinstance(result, str)
+            assert "too large" in result
+
+    @pytest.mark.asyncio
+    async def test_error_messages_do_not_leak_ha_url(self, mock_config):
+        """Error messages must not contain the HA_URL."""
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection failed"))
+
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', "http://secret-host:8123"):
+                with patch('app.hass.decorators.HA_URL', "http://secret-host:8123"):
+                    with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                        result = await get_entity_state("light.test")
+                        assert "error" in result
+                        # HA_URL must not appear in the error message
+                        assert "secret-host" not in result["error"]
+                        assert "8123" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_does_not_leak_details(self, mock_config):
+        """Unexpected errors return generic message, not internal details."""
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=RuntimeError("Internal DB path: /var/lib/ha/db"))
+
+        with patch('app.hass.entities.get_client', return_value=mock_client):
+            with patch('app.hass.entities.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                    result = await get_entity_state("light.test")
+                    assert "error" in result
+                    # Should not leak internal details
+                    assert "/var/lib" not in result["error"]
+                    assert "Internal DB" not in result["error"]
+                    assert result["error"] == "An unexpected error occurred"
+
+    @pytest.mark.asyncio
+    async def test_get_entities_validates_domain(self, mock_config):
+        """get_entities rejects invalid domain names."""
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await get_entities(domain="../evil")
+            # handle_api_errors sees 'Dict' in 'List[Dict[...]]' annotation, returns dict
+            assert isinstance(result, dict)
+            assert "error" in result
+            assert "Invalid domain" in result["error"]

@@ -61,6 +61,28 @@ def async_handler(command_type: str):
         return cast(Callable[..., Awaitable[T]], wrapper)
     return decorator
 
+
+def _simplify_entity(entity: dict) -> dict:
+    """Create a simplified entity dict with domain-specific key attributes."""
+    domain = entity["entity_id"].split(".")[0]
+    attrs = entity.get("attributes", {})
+    simplified = {
+        "entity_id": entity["entity_id"],
+        "state": entity["state"],
+        "domain": domain,
+        "friendly_name": attrs.get("friendly_name", entity["entity_id"]),
+    }
+    if domain == "light" and "brightness" in attrs:
+        simplified["brightness"] = attrs["brightness"]
+    elif domain == "sensor" and "unit_of_measurement" in attrs:
+        simplified["unit"] = attrs["unit_of_measurement"]
+    elif domain == "climate" and "temperature" in attrs:
+        simplified["temperature"] = attrs["temperature"]
+    elif domain == "media_player" and "media_title" in attrs:
+        simplified["media_title"] = attrs["media_title"]
+    return simplified
+
+
 @mcp.tool()
 @async_handler("get_version")
 async def get_version() -> str:
@@ -155,7 +177,7 @@ async def get_entity_resource(entity_id: str) -> str:
     logger.info(f"Getting entity resource: {entity_id}")
     
     # Get the entity state with caching (using lean format for token efficiency)
-    state = await get_entity_state(entity_id, use_cache=True, lean=True)
+    state = await get_entity_state(entity_id, lean=True)
     
     # Check if there was an error
     if "error" in state:
@@ -440,36 +462,13 @@ async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
         simplified_entities = []
         
         for entity in entities:
-            domain = entity["entity_id"].split(".")[0]
-            
-            # Count domains
+            simplified = _simplify_entity(entity)
+            domain = simplified["domain"]
             if domain not in domains_count:
                 domains_count[domain] = 0
             domains_count[domain] += 1
-            
-            # Create simplified entity representation
-            simplified_entity = {
-                "entity_id": entity["entity_id"],
-                "state": entity["state"],
-                "domain": domain,
-                "friendly_name": entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
-            }
-            
-            # Add key attributes based on domain
-            attributes = entity.get("attributes", {})
-            
-            # Include domain-specific important attributes
-            if domain == "light" and "brightness" in attributes:
-                simplified_entity["brightness"] = attributes["brightness"]
-            elif domain == "sensor" and "unit_of_measurement" in attributes:
-                simplified_entity["unit"] = attributes["unit_of_measurement"]
-            elif domain == "climate" and "temperature" in attributes:
-                simplified_entity["temperature"] = attributes["temperature"]
-            elif domain == "media_player" and "media_title" in attributes:
-                simplified_entity["media_title"] = attributes["media_title"]
-            
-            simplified_entities.append(simplified_entity)
-        
+            simplified_entities.append(simplified)
+
         # Return structured response for empty query
         return {
             "count": len(simplified_entities),
@@ -490,36 +489,13 @@ async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
     simplified_entities = []
     
     for entity in entities:
-        domain = entity["entity_id"].split(".")[0]
-        
-        # Count domains
+        simplified = _simplify_entity(entity)
+        domain = simplified["domain"]
         if domain not in domains_count:
             domains_count[domain] = 0
         domains_count[domain] += 1
-        
-        # Create simplified entity representation
-        simplified_entity = {
-            "entity_id": entity["entity_id"],
-            "state": entity["state"],
-            "domain": domain,
-            "friendly_name": entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
-        }
-        
-        # Add key attributes based on domain
-        attributes = entity.get("attributes", {})
-        
-        # Include domain-specific important attributes
-        if domain == "light" and "brightness" in attributes:
-            simplified_entity["brightness"] = attributes["brightness"]
-        elif domain == "sensor" and "unit_of_measurement" in attributes:
-            simplified_entity["unit"] = attributes["unit_of_measurement"]
-        elif domain == "climate" and "temperature" in attributes:
-            simplified_entity["temperature"] = attributes["temperature"]
-        elif domain == "media_player" and "media_title" in attributes:
-            simplified_entity["media_title"] = attributes["media_title"]
-        
-        simplified_entities.append(simplified_entity)
-    
+        simplified_entities.append(simplified)
+
     # Return structured response
     return {
         "count": len(simplified_entities),
@@ -612,30 +588,7 @@ async def search_entities_resource_with_limit(query: str, limit: str) -> str:
     result += "```json\n"
     
     # Create a simplified JSON representation with only essential fields
-    simplified_entities = []
-    for entity in entities:
-        simplified_entity = {
-            "entity_id": entity["entity_id"],
-            "state": entity["state"],
-            "domain": entity["entity_id"].split(".")[0],
-            "friendly_name": entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
-        }
-        
-        # Add key attributes based on domain type if they exist
-        domain = entity["entity_id"].split(".")[0]
-        attributes = entity.get("attributes", {})
-        
-        # Include domain-specific important attributes
-        if domain == "light" and "brightness" in attributes:
-            simplified_entity["brightness"] = attributes["brightness"]
-        elif domain == "sensor" and "unit_of_measurement" in attributes:
-            simplified_entity["unit"] = attributes["unit_of_measurement"]
-        elif domain == "climate" and "temperature" in attributes:
-            simplified_entity["temperature"] = attributes["temperature"]
-        elif domain == "media_player" and "media_title" in attributes:
-            simplified_entity["media_title"] = attributes["media_title"]
-        
-        simplified_entities.append(simplified_entity)
+    simplified_entities = [_simplify_entity(entity) for entity in entities]
     
     result += json.dumps(simplified_entities, indent=2)
     result += "\n```\n"
@@ -713,7 +666,7 @@ async def get_entity_resource_detailed(entity_id: str) -> str:
     logger.info(f"Getting detailed entity resource: {entity_id}")
     
     # Get all fields, no filtering (detailed view explicitly requests all data)
-    state = await get_entity_state(entity_id, use_cache=True, lean=False)
+    state = await get_entity_state(entity_id, lean=False)
     
     # Check if there was an error
     if "error" in state:
@@ -915,7 +868,7 @@ async def list_automations(limit: int = DEFAULT_AUTOMATION_LIMIT) -> Dict[str, A
             "count": 0,
             "total_available": 0,
             "truncated": False,
-            "error": str(e)
+            "error": "Error listing automations"
         }
 
 
@@ -1365,7 +1318,7 @@ async def get_history(
         logger.error(f"Error processing history for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": f"Error processing history: {str(e)}",
+            "error": "Error processing history",
             "states": [],
             "count": 0,
             "total_available": 0,
@@ -1498,7 +1451,7 @@ async def get_history_range(
         logger.error(f"Date parsing error for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": str(e),
+            "error": "Invalid date/time format. Use ISO 8601, date only, or keywords: now, today, yesterday",
             "states": [],
             "count": 0,
             "total_available": 0,
@@ -1511,7 +1464,7 @@ async def get_history_range(
         logger.error(f"Error processing history range for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": f"Error processing history: {str(e)}",
+            "error": "Error processing history",
             "states": [],
             "count": 0,
             "total_available": 0,
@@ -1598,7 +1551,7 @@ async def get_statistics(
         logger.error(f"Error getting statistics for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": f"Error retrieving statistics: {str(e)}",
+            "error": "Error retrieving statistics",
             "statistics": [],
             "count": 0
         }
@@ -1688,7 +1641,7 @@ async def get_statistics_range(
         logger.error(f"Date parsing error for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": str(e),
+            "error": "Invalid date/time format. Use ISO 8601, date only, or keywords: now, today, yesterday",
             "statistics": [],
             "count": 0,
             "start_time": start_time,
@@ -1698,7 +1651,7 @@ async def get_statistics_range(
         logger.error(f"Error getting statistics range for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
-            "error": f"Error retrieving statistics: {str(e)}",
+            "error": "Error retrieving statistics",
             "statistics": [],
             "count": 0,
             "start_time": start_time,
@@ -2004,5 +1957,5 @@ async def query_entities(
             "total_matched": 0,
             "truncated": False,
             "entities": [],
-            "error": f"Error querying entities: {str(e)}"
+            "error": "Error querying entities"
         }
