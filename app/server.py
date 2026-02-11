@@ -25,9 +25,11 @@ from app.hass import (
     get_automation_trace as hass_get_automation_trace,
     sanitize_for_logging, render_template,
     get_all_entity_states, evaluate_cel_filter,
+    get_hass_core_logs, set_hass_log_level,
     # Context flooding prevention constants
     DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
     DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
+    DEFAULT_CORE_LOG_LIMIT, MAX_CORE_LOG_LIMIT,
     DEFAULT_AUTOMATION_LIMIT, MAX_AUTOMATION_LIMIT,
     DEFAULT_ALL_ENTITIES_LIMIT, DEFAULT_DOMAIN_ENTITIES_LIMIT,
     VALID_SAMPLE_STRATEGIES,
@@ -1760,6 +1762,111 @@ async def get_error_log(
         since_minutes=since_minutes,
         truncate_traces=truncate_traces
     )
+
+
+@mcp.tool()
+@async_handler("get_core_logs")
+async def get_core_logs(
+    limit: int = DEFAULT_CORE_LOG_LIMIT,
+    level: Optional[str] = None,
+    integration: Optional[str] = None,
+    pattern: Optional[str] = None,
+    since_minutes: Optional[int] = None,
+    lines: int = 500,
+    truncate_traces: bool = True
+) -> Dict[str, Any]:
+    """
+    Get Home Assistant core logs (DEBUG/INFO/WARNING/ERROR) from the journal
+
+    Fetches from the Supervisor journal API (HAOS/Supervised) with automatic
+    fallback to /api/error_log (Docker/Core installs).
+
+    CONTEXT FLOODING PREVENTION:
+    - Default 50 records (max 200)
+    - Stacktraces truncated to 3 lines by default
+    - Messages truncated to 500 chars
+    - Use filters to narrow results
+
+    Args:
+        limit: Maximum records to return (1-200, default: 50)
+        level: Filter by log level ("DEBUG", "INFO", "WARNING", "ERROR")
+        integration: Filter by integration name (e.g., "mqtt", "llmvision")
+        pattern: Case-insensitive substring match on message content
+        since_minutes: Only return logs from the last N minutes
+        lines: Lines to request from journal API (default: 500)
+        truncate_traces: Truncate stacktraces to 3 lines (default: True)
+
+    Returns:
+        Dictionary containing:
+        - records: List of log records (timestamp, level, logger, message, integration)
+        - count: Number of records returned
+        - total_parsed: Total records parsed before filtering
+        - source: "supervisor", "error_log", or "none"
+        - truncated: Whether results were truncated
+        - filters_applied: Dict of active filters
+
+    Examples:
+        get_core_logs() - recent 50 log entries
+        get_core_logs(level="DEBUG", integration="llmvision") - debug logs for llmvision
+        get_core_logs(pattern="timeout", since_minutes=60) - timeout errors in last hour
+        get_core_logs(level="ERROR", limit=10) - last 10 errors
+
+    Best Practices:
+        - Use set_log_level to enable DEBUG first, then get_core_logs to read them
+        - Combine level + integration for focused debugging
+        - Use pattern for keyword search across all log levels
+        - Remember to reset log level to WARNING after debugging
+    """
+    logger.info(f"Getting core logs (limit: {limit}, level: {level}, integration: {integration})")
+    return await get_hass_core_logs(
+        limit=limit,
+        level=level,
+        integration=integration,
+        pattern=pattern,
+        since_minutes=since_minutes,
+        lines=lines,
+        truncate_traces=truncate_traces,
+    )
+
+
+@mcp.tool()
+@async_handler("set_log_level")
+async def set_log_level(
+    integration: str,
+    level: str,
+    custom_component: bool = False
+) -> Dict[str, Any]:
+    """
+    Set the log level for a Home Assistant integration
+
+    Calls the logger.set_level service to enable/disable debug logging.
+
+    Args:
+        integration: Integration name (e.g., "mqtt", "zwave", "llmvision")
+        level: Log level to set: "debug", "info", "warning", "error"
+        custom_component: If True, targets custom_components.X instead of homeassistant.components.X
+
+    Returns:
+        Dictionary containing:
+        - success: Whether the level was set successfully
+        - integration: The integration name
+        - level: The level that was set
+        - logger_name: The full logger path that was configured
+        - error: Error message if failed
+
+    Examples:
+        set_log_level("llmvision", "debug", custom_component=True) - enable debug for llmvision
+        set_log_level("mqtt", "debug") - enable debug for MQTT
+        set_log_level("mqtt", "warning") - reset MQTT to normal logging
+
+    Best Practices:
+        - Enable debug: set_log_level("integration", "debug")
+        - Read logs: get_core_logs(integration="integration", level="DEBUG")
+        - Reset: set_log_level("integration", "warning")
+        - Use custom_component=True for HACS/custom integrations
+    """
+    logger.info(f"Setting log level for {integration} to {level}")
+    return await set_hass_log_level(integration, level, custom_component)
 
 
 @mcp.tool()

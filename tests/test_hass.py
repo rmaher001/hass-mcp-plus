@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import json
 import httpx
 from typing import Dict, List, Any
+from datetime import datetime, timezone, timedelta
+import re
 
 import ssl
 
@@ -908,3 +910,454 @@ class TestSSLVerification:
             assert "error" in result
             assert "Cannot connect" in result["error"]
             assert "HA_VERIFY_SSL" not in result["error"]
+
+
+class TestLogParsing:
+    """Test the _parse_log_text function for Supervisor journal log output."""
+
+    def test_parse_standard_log_lines(self):
+        """Parse typical HA Core journal lines with timestamps and levels."""
+        from app.hass import _parse_log_text
+
+        raw = (
+            "2026-02-10 10:00:00.123 ERROR (MainThread) [homeassistant.components.mqtt] Connection lost\n"
+            "2026-02-10 10:00:01.456 WARNING (MainThread) [homeassistant.components.zwave] Node slow\n"
+            "2026-02-10 10:00:02.789 INFO (MainThread) [homeassistant.core] Bus ready\n"
+        )
+        records = _parse_log_text(raw)
+        assert len(records) == 3
+
+        # First record
+        assert records[0]["level"] == "ERROR"
+        assert records[0]["logger"] == "homeassistant.components.mqtt"
+        assert records[0]["message"] == "Connection lost"
+        assert records[0]["timestamp"] == "2026-02-10 10:00:00.123"
+
+        # Second record
+        assert records[1]["level"] == "WARNING"
+        assert records[1]["logger"] == "homeassistant.components.zwave"
+        assert records[1]["message"] == "Node slow"
+
+        # Third record
+        assert records[2]["level"] == "INFO"
+        assert records[2]["logger"] == "homeassistant.core"
+
+    def test_parse_debug_level(self):
+        """Parse DEBUG level log lines."""
+        from app.hass import _parse_log_text
+
+        raw = "2026-02-10 10:00:00.000 DEBUG (MainThread) [custom_components.llmvision] Processing image\n"
+        records = _parse_log_text(raw)
+        assert len(records) == 1
+        assert records[0]["level"] == "DEBUG"
+        assert records[0]["logger"] == "custom_components.llmvision"
+
+    def test_parse_continuation_lines_attached(self):
+        """Continuation lines (stacktraces) are appended to previous record's message."""
+        from app.hass import _parse_log_text
+
+        raw = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] Something failed\n"
+            "Traceback (most recent call last):\n"
+            "  File \"test.py\", line 1\n"
+            "ValueError: bad value\n"
+            "2026-02-10 10:00:01.000 INFO (MainThread) [homeassistant.core] Next log\n"
+        )
+        records = _parse_log_text(raw)
+        assert len(records) == 2
+        # First record should include continuation lines
+        assert "Traceback" in records[0]["message"]
+        assert "ValueError" in records[0]["message"]
+        # Second record should be clean
+        assert records[1]["message"] == "Next log"
+
+    def test_parse_empty_input(self):
+        """Empty or whitespace-only input returns empty list."""
+        from app.hass import _parse_log_text
+
+        assert _parse_log_text("") == []
+        assert _parse_log_text("   \n  \n") == []
+
+    def test_parse_extracts_integration(self):
+        """Integration name is extracted from logger path."""
+        from app.hass import _parse_log_text
+
+        raw = "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.components.mqtt.client] Disconnected\n"
+        records = _parse_log_text(raw)
+        assert records[0]["integration"] == "mqtt"
+
+    def test_parse_custom_component_integration(self):
+        """Custom component integration name extracted from custom_components.X."""
+        from app.hass import _parse_log_text
+
+        raw = "2026-02-10 10:00:00.000 DEBUG (MainThread) [custom_components.llmvision.service] Request sent\n"
+        records = _parse_log_text(raw)
+        assert records[0]["integration"] == "llmvision"
+
+    def test_parse_no_integration(self):
+        """Logger without components/custom_components gets integration=None."""
+        from app.hass import _parse_log_text
+
+        raw = "2026-02-10 10:00:00.000 INFO (MainThread) [homeassistant.core] Started\n"
+        records = _parse_log_text(raw)
+        assert records[0]["integration"] is None
+
+    def test_parse_various_thread_names(self):
+        """Log lines with different thread names parse correctly."""
+        from app.hass import _parse_log_text
+
+        raw = (
+            "2026-02-10 10:00:00.000 INFO (SyncWorker_0) [homeassistant.core] Sync work\n"
+            "2026-02-10 10:00:01.000 DEBUG (Recorder) [homeassistant.components.recorder] Write\n"
+        )
+        records = _parse_log_text(raw)
+        assert len(records) == 2
+        assert records[0]["message"] == "Sync work"
+        assert records[1]["integration"] == "recorder"
+
+
+class TestFetchLogText:
+    """Test the _fetch_log_text function with primary/fallback logic."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_supervisor_api_success(self, mock_config):
+        """Successful fetch from Supervisor journal API."""
+        from app.hass import _fetch_log_text
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "2026-02-10 10:00:00.000 INFO (MainThread) [homeassistant.core] Started\n"
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    text, source = await _fetch_log_text(lines=100)
+                    assert "Started" in text
+                    assert source == "supervisor"
+
+    @pytest.mark.asyncio
+    async def test_fetch_fallback_to_error_log(self, mock_config):
+        """Falls back to /api/error_log when Supervisor API returns 404."""
+        from app.hass import _fetch_log_text
+
+        # Supervisor API returns 404
+        mock_supervisor_response = MagicMock()
+        mock_supervisor_response.status_code = 404
+        mock_supervisor_response.text = "Not Found"
+
+        # Fallback error_log API returns 200
+        mock_fallback_response = MagicMock()
+        mock_fallback_response.status_code = 200
+        mock_fallback_response.text = "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] Error occurred\n"
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=[mock_supervisor_response, mock_fallback_response])
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    text, source = await _fetch_log_text(lines=100)
+                    assert "Error occurred" in text
+                    assert source == "error_log"
+
+    @pytest.mark.asyncio
+    async def test_fetch_both_fail_returns_error(self, mock_config):
+        """Returns empty string and 'none' when both APIs fail."""
+        from app.hass import _fetch_log_text
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch('app.hass.get_client', return_value=mock_client):
+            with patch('app.hass.HA_URL', mock_config["hass_url"]):
+                with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                    text, source = await _fetch_log_text(lines=100)
+                    assert text == ""
+                    assert source == "none"
+
+
+class TestGetHassCoreLog:
+    """Test the get_hass_core_logs function with filtering and limits."""
+
+    @pytest.mark.asyncio
+    async def test_basic_retrieval(self, mock_config):
+        """Basic call returns structured dict with records."""
+        from app.hass import get_hass_core_logs
+
+        raw_log = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.components.mqtt] Connection lost\n"
+            "2026-02-10 10:00:01.000 WARNING (MainThread) [homeassistant.components.zwave] Node slow\n"
+            "2026-02-10 10:00:02.000 INFO (MainThread) [homeassistant.core] Bus ready\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs()
+
+                assert isinstance(result, dict)
+                assert "records" in result
+                assert "count" in result
+                assert "total_parsed" in result
+                assert "source" in result
+                assert result["source"] == "supervisor"
+                assert result["total_parsed"] == 3
+
+    @pytest.mark.asyncio
+    async def test_filter_by_level(self, mock_config):
+        """Filter by level returns only matching records."""
+        from app.hass import get_hass_core_logs
+
+        raw_log = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] Err\n"
+            "2026-02-10 10:00:01.000 WARNING (MainThread) [homeassistant.core] Warn\n"
+            "2026-02-10 10:00:02.000 DEBUG (MainThread) [homeassistant.core] Dbg\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(level="ERROR")
+                assert result["count"] == 1
+                assert result["records"][0]["level"] == "ERROR"
+
+    @pytest.mark.asyncio
+    async def test_filter_by_integration(self, mock_config):
+        """Filter by integration returns only records from that integration."""
+        from app.hass import get_hass_core_logs
+
+        raw_log = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.components.mqtt] MQTT error\n"
+            "2026-02-10 10:00:01.000 ERROR (MainThread) [homeassistant.components.zwave] Z-Wave error\n"
+            "2026-02-10 10:00:02.000 DEBUG (MainThread) [custom_components.llmvision] LLM debug\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(integration="mqtt")
+                assert result["count"] == 1
+                assert result["records"][0]["integration"] == "mqtt"
+
+                # Test custom component filter
+                result = await get_hass_core_logs(integration="llmvision")
+                assert result["count"] == 1
+                assert result["records"][0]["integration"] == "llmvision"
+
+    @pytest.mark.asyncio
+    async def test_filter_by_pattern(self, mock_config):
+        """Filter by pattern matches message content."""
+        from app.hass import get_hass_core_logs
+
+        raw_log = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] Connection timeout\n"
+            "2026-02-10 10:00:01.000 ERROR (MainThread) [homeassistant.core] Memory error\n"
+            "2026-02-10 10:00:02.000 ERROR (MainThread) [homeassistant.core] Connection refused\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(pattern="Connection")
+                assert result["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_filter_by_since_minutes(self, mock_config):
+        """Filter by since_minutes returns only recent records."""
+        from app.hass import get_hass_core_logs
+
+        now = datetime.now()
+        recent = now.strftime("%Y-%m-%d %H:%M:%S.000")
+        old = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S.000")
+
+        raw_log = (
+            f"{old} ERROR (MainThread) [homeassistant.core] Old error\n"
+            f"{recent} ERROR (MainThread) [homeassistant.core] Recent error\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(since_minutes=30)
+                assert result["count"] == 1
+                assert "Recent error" in result["records"][0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_limit_enforced(self, mock_config):
+        """Record limit is enforced, defaults to 50."""
+        from app.hass import get_hass_core_logs
+
+        # Generate 100 log lines
+        lines = []
+        for i in range(100):
+            lines.append(f"2026-02-10 10:{i//60:02d}:{i%60:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
+        raw_log = "\n".join(lines) + "\n"
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs()
+                assert result["count"] <= 50
+                assert result["total_parsed"] == 100
+                assert result["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_limit_custom(self, mock_config):
+        """Custom limit is respected up to MAX_CORE_LOG_LIMIT."""
+        from app.hass import get_hass_core_logs
+
+        lines = []
+        for i in range(10):
+            lines.append(f"2026-02-10 10:00:{i:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
+        raw_log = "\n".join(lines) + "\n"
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(limit=5)
+                assert result["count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_message_truncation(self, mock_config):
+        """Long messages are truncated to 500 chars."""
+        from app.hass import get_hass_core_logs
+
+        long_msg = "A" * 1000
+        raw_log = f"2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] {long_msg}\n"
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs()
+                msg = result["records"][0]["message"]
+                assert len(msg) <= 520  # 500 + "... [truncated]" suffix
+                assert msg.endswith("... [truncated]")
+
+    @pytest.mark.asyncio
+    async def test_trace_truncation(self, mock_config):
+        """Stacktraces in continuation lines are truncated to 3 lines."""
+        from app.hass import get_hass_core_logs
+
+        raw_log = (
+            "2026-02-10 10:00:00.000 ERROR (MainThread) [homeassistant.core] Error\n"
+            "Traceback (most recent call last):\n"
+            "  File \"a.py\", line 1\n"
+            "  File \"b.py\", line 2\n"
+            "  File \"c.py\", line 3\n"
+            "  File \"d.py\", line 4\n"
+            "  File \"e.py\", line 5\n"
+            "ValueError: bad\n"
+        )
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(truncate_traces=True)
+                msg = result["records"][0]["message"]
+                # Should have the main message plus truncated trace
+                assert "truncated" in msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_returns_most_recent_records(self, mock_config):
+        """When truncated, returns the most recent (tail) records."""
+        from app.hass import get_hass_core_logs
+
+        lines = []
+        for i in range(10):
+            lines.append(f"2026-02-10 10:00:{i:02d}.000 INFO (MainThread) [homeassistant.core] Line {i}")
+        raw_log = "\n".join(lines) + "\n"
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=(raw_log, "supervisor"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs(limit=3)
+                # Should have the last 3 records
+                assert result["count"] == 3
+                assert "Line 7" in result["records"][0]["message"]
+                assert "Line 9" in result["records"][2]["message"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_returns_error(self, mock_config):
+        """When log fetch fails, returns error dict."""
+        from app.hass import get_hass_core_logs
+
+        with patch('app.hass._fetch_log_text', AsyncMock(return_value=("", "none"))):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_hass_core_logs()
+                assert "error" in result
+
+
+class TestSetHassLogLevel:
+    """Test the set_hass_log_level function."""
+
+    @pytest.mark.asyncio
+    async def test_set_debug_level(self, mock_config):
+        """Set integration to debug level via logger.set_level service."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await set_hass_log_level("llmvision", "debug")
+                assert result["success"] is True
+                assert result["integration"] == "llmvision"
+                assert result["level"] == "debug"
+
+                # Verify call_service was called correctly
+                mock_svc.assert_called_once()
+                call_args = mock_svc.call_args
+                assert call_args[0][0] == "logger"
+                assert call_args[0][1] == "set_level"
+
+    @pytest.mark.asyncio
+    async def test_set_warning_level(self, mock_config):
+        """Set integration to warning level."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await set_hass_log_level("mqtt", "warning")
+                assert result["success"] is True
+                assert result["level"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_invalid_level_rejected(self, mock_config):
+        """Invalid log level returns error."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+            result = await set_hass_log_level("mqtt", "CRITICAL")
+            assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_custom_component_prefix(self, mock_config):
+        """Custom component logger gets custom_components prefix."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await set_hass_log_level("llmvision", "debug", custom_component=True)
+                assert result["success"] is True
+
+                call_data = mock_svc.call_args[0][2]
+                # Should have custom_components.llmvision key
+                assert any("custom_components.llmvision" in str(k) for k in call_data.keys())
+
+    @pytest.mark.asyncio
+    async def test_standard_integration_prefix(self, mock_config):
+        """Standard integration logger gets homeassistant.components prefix."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.call_service', AsyncMock(return_value={})) as mock_svc:
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await set_hass_log_level("mqtt", "debug", custom_component=False)
+                assert result["success"] is True
+
+                call_data = mock_svc.call_args[0][2]
+                assert any("homeassistant.components.mqtt" in str(k) for k in call_data.keys())
+
+    @pytest.mark.asyncio
+    async def test_service_call_failure(self, mock_config):
+        """Service call failure returns error."""
+        from app.hass import set_hass_log_level
+
+        with patch('app.hass.call_service', AsyncMock(return_value={"error": "Service failed"})):
+            with patch('app.hass.HA_TOKEN', mock_config["hass_token"]):
+                result = await set_hass_log_level("mqtt", "debug")
+                assert "error" in result

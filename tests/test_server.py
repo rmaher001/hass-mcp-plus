@@ -52,13 +52,15 @@ class TestMCPServer:
         # List of expected tool functions
         expected_tools = [
             "get_version",
-            "get_entity", 
+            "get_entity",
             "list_entities",
             "entity_action",
             "domain_summary",  # Domain summaries tool
             "call_service",
             "restart_ha",
-            "list_automations"
+            "list_automations",
+            "get_core_logs",
+            "set_log_level"
         ]
         
         # Check that each expected tool function exists
@@ -143,16 +145,18 @@ class TestMCPServer:
         # List of expected tool functions
         tool_functions = [
             "get_version",
-            "get_entity", 
+            "get_entity",
             "list_entities",
             "entity_action",
             "domain_summary",
             "call_service",
             "restart_ha",
             "list_automations",
-            "search_entities", 
+            "search_entities",
             "system_overview",
-            "get_error_log"
+            "get_error_log",
+            "get_core_logs",
+            "set_log_level"
         ]
         
         # Check that each tool function has a proper docstring and exists

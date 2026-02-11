@@ -1,8 +1,9 @@
 import httpx
-from typing import Dict, Any, Optional, List, TypeVar, Callable, Awaitable, Union, cast
+from typing import Dict, Any, Optional, List, Tuple, TypeVar, Callable, Awaitable, Union, cast
 import functools
 import inspect
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 import json
 import asyncio
@@ -64,6 +65,16 @@ DEFAULT_HISTORY_LIMIT = 100
 # Error log limits
 MAX_ERROR_LOG_LIMIT = 100
 DEFAULT_ERROR_LOG_LIMIT = 50
+
+# Core log limits (Supervisor journal API)
+MAX_CORE_LOG_LIMIT = 200
+DEFAULT_CORE_LOG_LIMIT = 50
+DEFAULT_CORE_LOG_LINES = 500
+MAX_CORE_LOG_MESSAGE_LENGTH = 500
+DEFAULT_CORE_LOG_TRACE_LINES = 3
+
+# Valid log levels for set_log_level
+VALID_LOG_LEVELS = frozenset(["debug", "info", "warning", "error"])
 
 # Automation limits
 DEFAULT_AUTOMATION_LIMIT = 50
@@ -999,6 +1010,286 @@ async def get_hass_error_log(
             "warning_count": 0,
             "integration_mentions": {}
         }
+
+
+# ============================================================================
+# Core Log Functions (Supervisor Journal API)
+# ============================================================================
+
+# Regex for HA log lines: "2026-02-10 10:00:00.123 ERROR (MainThread) [logger.name] message"
+_LOG_LINE_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)\s+'  # timestamp
+    r'(DEBUG|INFO|WARNING|ERROR)\s+'                        # level
+    r'\(([^)]+)\)\s+'                                       # thread
+    r'\[([^\]]+)\]\s+'                                      # logger
+    r'(.*)'                                                 # message
+)
+
+
+def _parse_log_text(raw: str) -> List[Dict[str, Any]]:
+    """
+    Parse raw text from the Supervisor journal API into structured log records.
+
+    Each record contains: timestamp, level, logger, message, integration (if extractable).
+    Continuation lines (stacktraces) are appended to the previous record's message.
+
+    Args:
+        raw: Raw log text from the Supervisor journal API or /api/error_log
+
+    Returns:
+        List of parsed log record dicts
+    """
+    if not raw or not raw.strip():
+        return []
+
+    records: List[Dict[str, Any]] = []
+
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+
+        match = _LOG_LINE_RE.match(line)
+        if match:
+            timestamp, level, _thread, logger_name, message = match.groups()
+
+            # Extract integration from logger path
+            integration = None
+            if "homeassistant.components." in logger_name:
+                integration = logger_name.split("homeassistant.components.")[1].split(".")[0]
+            elif "custom_components." in logger_name:
+                integration = logger_name.split("custom_components.")[1].split(".")[0]
+
+            records.append({
+                "timestamp": timestamp,
+                "level": level,
+                "logger": logger_name,
+                "message": message,
+                "integration": integration,
+            })
+        elif records:
+            # Continuation line — append to previous record's message
+            records[-1]["message"] += "\n" + line
+
+    return records
+
+
+async def _fetch_log_text(lines: int = DEFAULT_CORE_LOG_LINES) -> Tuple[str, str]:
+    """
+    Fetch log text from Home Assistant.
+
+    Primary: Supervisor journal API (HAOS/Supervised installs)
+    Fallback: /api/error_log (Docker/Core installs)
+
+    Args:
+        lines: Number of lines to request from the journal API
+
+    Returns:
+        Tuple of (raw_text, source) where source is "supervisor", "error_log", or "none"
+    """
+    client = await get_client()
+
+    # Primary: Supervisor journal API
+    try:
+        await _rate_limiter.acquire()
+        response = await client.get(
+            f"{HA_URL}/api/hassio/core/logs",
+            headers=get_ha_headers(),
+            params={"no_colors": "", "lines": str(lines)},
+        )
+        if response.status_code == 200 and response.text.strip():
+            return response.text, "supervisor"
+    except Exception as e:
+        logger.debug(f"Supervisor log API failed: {e}")
+
+    # Fallback: /api/error_log
+    try:
+        await _rate_limiter.acquire()
+        response = await client.get(
+            f"{HA_URL}/api/error_log",
+            headers=get_ha_headers(),
+        )
+        if response.status_code == 200 and response.text.strip():
+            return response.text, "error_log"
+    except Exception as e:
+        logger.debug(f"Error log API failed: {e}")
+
+    return "", "none"
+
+
+@handle_api_errors
+async def get_hass_core_logs(
+    limit: int = DEFAULT_CORE_LOG_LIMIT,
+    level: Optional[str] = None,
+    integration: Optional[str] = None,
+    pattern: Optional[str] = None,
+    since_minutes: Optional[int] = None,
+    lines: int = DEFAULT_CORE_LOG_LINES,
+    truncate_traces: bool = True,
+) -> Dict[str, Any]:
+    """
+    Get Home Assistant core logs from the Supervisor journal API.
+
+    Fetches log lines, parses them into structured records, and applies filters.
+
+    Args:
+        limit: Maximum records to return (1-200, default: 50)
+        level: Filter by log level (DEBUG, INFO, WARNING, ERROR)
+        integration: Filter by integration name (e.g., "mqtt", "llmvision")
+        pattern: Case-insensitive substring match on message content
+        since_minutes: Only return logs from the last N minutes
+        lines: Number of lines to request from journal API (default: 500)
+        truncate_traces: Truncate stacktraces in messages (default: True)
+
+    Returns:
+        Dict with records, count, total_parsed, source, truncated, filters_applied
+    """
+    # Enforce limit bounds
+    limit = max(1, min(limit, MAX_CORE_LOG_LIMIT))
+    lines = max(1, min(lines, 10000))
+
+    # Fetch raw log text
+    raw_text, source = await _fetch_log_text(lines=lines)
+
+    if not raw_text:
+        return {
+            "error": "Could not retrieve logs from Home Assistant. "
+                     "Supervisor journal API and /api/error_log both unavailable.",
+            "records": [],
+            "count": 0,
+            "total_parsed": 0,
+            "source": source,
+            "truncated": False,
+            "filters_applied": {},
+        }
+
+    # Parse raw text into structured records
+    all_records = _parse_log_text(raw_text)
+    total_parsed = len(all_records)
+    filters_applied: Dict[str, Any] = {}
+
+    # Apply filters
+    filtered = all_records
+
+    if level:
+        level_upper = level.upper()
+        filtered = [r for r in filtered if r["level"] == level_upper]
+        filters_applied["level"] = level_upper
+
+    if integration:
+        integration_lower = integration.lower()
+        filtered = [r for r in filtered if r.get("integration", "") and
+                    r["integration"].lower() == integration_lower]
+        filters_applied["integration"] = integration
+
+    if pattern:
+        pattern_lower = pattern.lower()
+        filtered = [r for r in filtered if pattern_lower in r["message"].lower()]
+        filters_applied["pattern"] = pattern
+
+    if since_minutes and since_minutes > 0:
+        cutoff = datetime.now() - timedelta(minutes=since_minutes)
+        time_filtered = []
+        for r in filtered:
+            try:
+                ts = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S.%f")
+                if ts >= cutoff:
+                    time_filtered.append(r)
+            except (ValueError, KeyError):
+                continue
+        filtered = time_filtered
+        filters_applied["since_minutes"] = since_minutes
+
+    # Take most recent records (tail of the list)
+    truncated = len(filtered) > limit
+    limited = filtered[-limit:] if truncated else filtered
+
+    # Post-process: truncate messages and traces
+    for record in limited:
+        msg = record["message"]
+
+        if truncate_traces:
+            # Split into first line + continuation
+            msg_lines = msg.split("\n")
+            if len(msg_lines) > 1:
+                first_line = msg_lines[0]
+                continuation = msg_lines[1:]
+                if len(continuation) > DEFAULT_CORE_LOG_TRACE_LINES:
+                    remaining = len(continuation) - DEFAULT_CORE_LOG_TRACE_LINES
+                    continuation = continuation[:DEFAULT_CORE_LOG_TRACE_LINES]
+                    continuation.append(f"... [{remaining} more lines truncated]")
+                record["message"] = first_line + "\n" + "\n".join(continuation)
+
+        # Truncate long messages
+        if len(record["message"]) > MAX_CORE_LOG_MESSAGE_LENGTH:
+            record["message"] = record["message"][:MAX_CORE_LOG_MESSAGE_LENGTH] + "... [truncated]"
+
+    return {
+        "records": limited,
+        "count": len(limited),
+        "total_parsed": total_parsed,
+        "source": source,
+        "truncated": truncated,
+        "filters_applied": filters_applied,
+    }
+
+
+@handle_api_errors
+async def set_hass_log_level(
+    integration: str,
+    level: str,
+    custom_component: bool = False,
+) -> Dict[str, Any]:
+    """
+    Set the log level for a Home Assistant integration.
+
+    Calls the logger.set_level service to toggle debug logging.
+
+    Args:
+        integration: Integration name (e.g., "mqtt", "llmvision")
+        level: Log level: "debug", "info", "warning", "error"
+        custom_component: If True, uses custom_components prefix instead of homeassistant.components
+
+    Returns:
+        Dict with success, integration, level, logger_name, or error
+    """
+    level_lower = level.lower()
+    if level_lower not in VALID_LOG_LEVELS:
+        return {
+            "error": f"Invalid log level: {level_lower}. Must be one of: {', '.join(sorted(VALID_LOG_LEVELS))}",
+            "success": False,
+        }
+
+    # Validate integration name (alphanumeric, underscore, hyphen only)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', integration):
+        return {
+            "error": f"Invalid integration name. Must contain only alphanumeric characters, underscores, and hyphens.",
+            "success": False,
+        }
+
+    # Build the logger name
+    if custom_component:
+        logger_name = f"custom_components.{integration}"
+    else:
+        logger_name = f"homeassistant.components.{integration}"
+
+    # Call logger.set_level service
+    result = await call_service("logger", "set_level", {logger_name: level_lower})
+
+    if isinstance(result, dict) and "error" in result:
+        return {
+            "error": result["error"],
+            "success": False,
+            "integration": integration,
+            "level": level_lower,
+            "logger_name": logger_name,
+        }
+
+    return {
+        "success": True,
+        "integration": integration,
+        "level": level_lower,
+        "logger_name": logger_name,
+    }
 
 
 @handle_api_errors
