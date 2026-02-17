@@ -881,6 +881,43 @@ class TestSSLVerification:
         assert ssl_context.check_hostname is True
         assert ssl_context.verify_mode == ssl.CERT_REQUIRED
 
+    def test_websocket_max_size_configured(self):
+        """websockets.connect uses max_size=16MB to handle large registry responses."""
+        import pathlib
+        ws_source = (
+            pathlib.Path(__file__).parent.parent / "app" / "hass" / "websocket.py"
+        ).read_text()
+        assert "max_size=16 * 1024 * 1024" in ws_source
+
+    @pytest.mark.asyncio
+    async def test_websocket_connect_passes_max_size(self, mock_config):
+        """call_websocket_api passes max_size=16MB to websockets.connect."""
+        from app.hass.websocket import call_websocket_api
+
+        mock_ws = AsyncMock()
+        mock_ws.recv = AsyncMock(side_effect=[
+            json.dumps({"type": "auth_required"}),
+            json.dumps({"type": "auth_ok"}),
+            json.dumps({"success": True, "result": {"ok": True}}),
+        ])
+        mock_ws.send = AsyncMock()
+
+        mock_connect = AsyncMock()
+        mock_connect.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_connect.__aexit__ = AsyncMock(return_value=False)
+
+        with patch('app.hass.websocket.HA_URL', 'http://test:8123'), \
+             patch('app.hass.websocket.HA_TOKEN', 'test-token'), \
+             patch('app.hass.websocket._rate_limiter') as mock_rl, \
+             patch('app.hass.websocket.websockets.connect', return_value=mock_connect) as mock_conn:
+            mock_rl.acquire = AsyncMock()
+            result = await call_websocket_api("config/entity_registry/list")
+
+            # Verify max_size was passed
+            mock_conn.assert_called_once()
+            call_kwargs = mock_conn.call_args
+            assert call_kwargs.kwargs.get('max_size') == 16 * 1024 * 1024
+
     @pytest.mark.asyncio
     async def test_connect_error_surfaces_ssl_error(self, mock_config):
         """SSL errors inside ConnectError are surfaced with a helpful hint."""

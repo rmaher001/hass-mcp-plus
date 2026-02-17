@@ -40,7 +40,7 @@ async def call_websocket_api(message_type: str, **kwargs) -> Dict[str, Any]:
     try:
         # Apply rate limiting before making connection
         await _rate_limiter.acquire()
-        async with websockets.connect(ws_url, ssl=ssl_context) as websocket:
+        async with websockets.connect(ws_url, ssl=ssl_context, max_size=16 * 1024 * 1024) as websocket:
             # Wait for auth required message
             auth_msg = await websocket.recv()
             auth_data = json.loads(auth_msg)
