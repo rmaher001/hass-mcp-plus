@@ -26,6 +26,9 @@ from app.hass import (
     sanitize_for_logging, render_template,
     get_all_entity_states, evaluate_cel_filter,
     get_hass_core_logs, set_hass_log_level,
+    remove_registry_entity, update_registry_entity,
+    get_registry_entity as hass_get_registry_entity,
+    list_registry_entities,
     # Context flooding prevention constants
     DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT,
     DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
@@ -1820,6 +1823,153 @@ async def set_log_level(
     """
     logger.info(f"Setting log level for {integration} to {level}")
     return await set_hass_log_level(integration, level, custom_component)
+
+
+@mcp.tool()
+@async_handler("remove_entity")
+async def remove_entity(entity_id: str, confirm: bool = False) -> Dict[str, Any]:
+    """
+    Remove an entity from the Home Assistant entity registry
+
+    SAFETY: By default returns a preview of what would be deleted.
+    Set confirm=True to actually perform the removal.
+
+    The entity may reappear if its integration recreates it on restart.
+    Consider using update_entity with disabled_by="user" to disable instead.
+
+    Args:
+        entity_id: The entity ID to remove (e.g., 'light.old_device')
+        confirm: If False (default), returns preview with entity details.
+                 If True, permanently removes the entity registry entry.
+
+    Returns:
+        Preview dict (confirm=False) or success dict with removed entity details (confirm=True)
+
+    Examples:
+        entity_id="light.orphaned_device" - preview what would be deleted
+        entity_id="light.orphaned_device", confirm=True - actually delete
+    """
+    logger.info(f"Removing entity from registry: {entity_id} (confirm={confirm})")
+    return await remove_registry_entity(entity_id, confirm=confirm)
+
+
+@mcp.tool()
+@async_handler("update_entity")
+async def update_entity(
+    entity_id: str,
+    name: Optional[str] = None,
+    icon: Optional[str] = None,
+    disabled_by: Optional[str] = None,
+    hidden_by: Optional[str] = None,
+    area_id: Optional[str] = None,
+    new_entity_id: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Update properties of an entity in the Home Assistant entity registry
+
+    Allows changing entity metadata such as friendly name, icon, area assignment,
+    disabling/enabling, hiding/unhiding, or renaming the entity ID.
+
+    Args:
+        entity_id: The entity ID to update (e.g., 'light.living_room')
+        name: Custom friendly name. Set to "none" to clear custom name
+        icon: Custom icon (e.g., 'mdi:lamp'). Set to "none" to clear custom icon
+        disabled_by: Set to "user" to disable, "none" to enable (re-enable a disabled entity)
+        hidden_by: Set to "user" to hide from UI, "none" to unhide
+        area_id: Assign entity to an area by area ID. Set to "none" to remove area
+        new_entity_id: Rename the entity ID itself (e.g., 'light.new_name')
+        options: Entity platform options dictionary
+
+    Returns:
+        Dictionary with success status and updated entity entry, or error
+
+    Examples:
+        entity_id="light.living_room", name="Living Room Lamp" - rename
+        entity_id="sensor.old", disabled_by="user" - disable entity
+        entity_id="sensor.old", disabled_by="none" - re-enable disabled entity
+        entity_id="light.test", new_entity_id="light.bedroom" - change entity ID
+        entity_id="switch.plug", area_id="kitchen" - assign to area
+        entity_id="switch.plug", hidden_by="none" - unhide entity
+    """
+    logger.info(f"Updating entity in registry: {entity_id}")
+
+    # Build kwargs, only passing fields that were explicitly provided.
+    # MCP protocol cannot distinguish "omitted" from None, so we use the
+    # string "none" as a sentinel to mean "clear this field" (set to None).
+    kwargs: Dict[str, Any] = {}
+    if name is not None:
+        kwargs["name"] = None if name.lower() == "none" else name
+    if icon is not None:
+        kwargs["icon"] = None if icon.lower() == "none" else icon
+    if disabled_by is not None:
+        kwargs["disabled_by"] = None if disabled_by.lower() == "none" else disabled_by
+    if hidden_by is not None:
+        kwargs["hidden_by"] = None if hidden_by.lower() == "none" else hidden_by
+    if area_id is not None:
+        kwargs["area_id"] = None if area_id.lower() == "none" else area_id
+    if new_entity_id is not None:
+        kwargs["new_entity_id"] = new_entity_id
+    if options is not None:
+        kwargs["options"] = options
+
+    return await update_registry_entity(entity_id, **kwargs)
+
+
+@mcp.tool()
+@async_handler("get_entity_registry")
+async def get_entity_registry(entity_id: str) -> Dict[str, Any]:
+    """
+    Get detailed registry entry for a single entity
+
+    Returns the full entity registry entry including platform, config entry,
+    device info, disabled/hidden status, area assignment, and more.
+
+    Args:
+        entity_id: The entity ID to look up (e.g., 'light.living_room')
+
+    Returns:
+        The full entity registry entry, or error
+
+    Examples:
+        entity_id="light.living_room" - get registry details
+        entity_id="sensor.temperature" - check platform and device info
+    """
+    logger.info(f"Getting entity registry entry: {entity_id}")
+    return await hass_get_registry_entity(entity_id)
+
+
+@mcp.tool()
+@async_handler("list_entity_registry")
+async def list_entity_registry(
+    domain: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    List all entity registry entries with optional domain filter
+
+    Returns registry entries (not states) including platform, config entry,
+    disabled/hidden status, and area assignments. Useful for auditing entities,
+    finding orphaned entries, or bulk management.
+
+    Args:
+        domain: Optional domain filter (e.g., 'light', 'sensor')
+        limit: Maximum number of entities to return (default: 100, max: 5000)
+
+    Returns:
+        Dictionary containing:
+        - entities: List of registry entries
+        - count: Number returned
+        - total_available: Total matching entries
+        - truncated: Whether results were limited
+
+    Examples:
+        domain="light" - list all light registry entries
+        limit=500 - get more entries
+        domain="sensor", limit=50 - sensor entries with limit
+    """
+    logger.info(f"Listing entity registry (domain={domain}, limit={limit})")
+    return await list_registry_entities(limit=limit, domain=domain)
 
 
 @mcp.tool()

@@ -38,6 +38,11 @@ from app.hass.constants import (  # noqa: F401
     MAX_SERVICE_PAYLOAD_BYTES,
     MAX_TEMPLATE_LENGTH,
     MAX_HISTORY_RAW_RECORDS,
+    MAX_ENTITY_NAME_LENGTH,
+    VALID_DISABLED_BY,
+    VALID_HIDDEN_BY,
+    DEFAULT_REGISTRY_LIMIT,
+    MAX_REGISTRY_LIMIT,
 )
 
 # --- validation ---
@@ -124,6 +129,14 @@ from app.hass.logging_ha import (  # noqa: F401
 from app.hass.summary import (  # noqa: F401
     summarize_domain,
     get_system_overview,
+)
+
+# --- registry ---
+from app.hass.registry import (  # noqa: F401
+    remove_registry_entity,
+    update_registry_entity,
+    get_registry_entity,
+    list_registry_entities,
 )
 
 # --- templates ---

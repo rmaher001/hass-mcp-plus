@@ -97,3 +97,10 @@ DEFAULT_STACKTRACE_LINES = 3
 
 # Valid sampling strategies for history
 VALID_SAMPLE_STRATEGIES = frozenset(["recent", "first", "even"])
+
+# Entity registry constants
+MAX_ENTITY_NAME_LENGTH = 256
+VALID_DISABLED_BY = frozenset(["user"])
+VALID_HIDDEN_BY = frozenset(["user"])
+DEFAULT_REGISTRY_LIMIT = 100
+MAX_REGISTRY_LIMIT = 5000

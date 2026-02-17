@@ -60,7 +60,11 @@ class TestMCPServer:
             "restart_ha",
             "list_automations",
             "get_core_logs",
-            "set_log_level"
+            "set_log_level",
+            "remove_entity",
+            "update_entity",
+            "get_entity_registry",
+            "list_entity_registry",
         ]
         
         # Check that each expected tool function exists
@@ -156,7 +160,11 @@ class TestMCPServer:
             "system_overview",
             "get_error_log",
             "get_core_logs",
-            "set_log_level"
+            "set_log_level",
+            "remove_entity",
+            "update_entity",
+            "get_entity_registry",
+            "list_entity_registry",
         ]
         
         # Check that each tool function has a proper docstring and exists
@@ -528,6 +536,63 @@ class TestMCPServer:
             assert result["total_matched"] == 2
             assert result["truncated"] is False
             assert len(result["entities"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_update_entity_enable_via_none_string(self):
+        """Test that update_entity converts 'none' string to None for enable/unhide."""
+        from app.server import update_entity
+
+        mock_result = {"success": True, "entity_id": "light.test", "result": {}}
+        with patch("app.server.update_registry_entity", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            # Test enabling a disabled entity
+            result = await update_entity(entity_id="light.test", disabled_by="none")
+            assert result["success"] is True
+            mock_fn.assert_called_once_with("light.test", disabled_by=None)
+
+            # Test unhiding an entity
+            mock_fn.reset_mock()
+            result = await update_entity(entity_id="light.test", hidden_by="none")
+            mock_fn.assert_called_once_with("light.test", hidden_by=None)
+
+            # Test clearing a custom name
+            mock_fn.reset_mock()
+            result = await update_entity(entity_id="light.test", name="none")
+            mock_fn.assert_called_once_with("light.test", name=None)
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_preview_and_confirm(self):
+        """Test that remove_entity passes confirm parameter through correctly."""
+        from app.server import remove_entity
+
+        mock_preview = {
+            "action": "preview",
+            "entity_id": "light.test",
+            "entity_details": {"entity_id": "light.test", "platform": "mqtt"},
+            "warning": "This will permanently remove...",
+            "suggestion": "Consider using update_entity...",
+            "confirm_required": True,
+        }
+        mock_confirmed = {
+            "success": True,
+            "entity_id": "light.test",
+            "removed_entity": {"entity_id": "light.test", "platform": "mqtt"},
+        }
+
+        with patch("app.server.remove_registry_entity", new_callable=AsyncMock) as mock_fn:
+            # Default (preview)
+            mock_fn.return_value = mock_preview
+            result = await remove_entity(entity_id="light.test")
+            assert result["action"] == "preview"
+            assert result["confirm_required"] is True
+            mock_fn.assert_called_once_with("light.test", confirm=False)
+
+            # Confirmed deletion
+            mock_fn.reset_mock()
+            mock_fn.return_value = mock_confirmed
+            result = await remove_entity(entity_id="light.test", confirm=True)
+            assert result["success"] is True
+            assert "removed_entity" in result
+            mock_fn.assert_called_once_with("light.test", confirm=True)
 
     @pytest.mark.asyncio
     async def test_query_entities_domain_and_expression(self):

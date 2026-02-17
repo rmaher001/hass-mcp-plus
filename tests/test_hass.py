@@ -1658,3 +1658,329 @@ class TestSecurityIntegration:
             assert isinstance(result, dict)
             assert "error" in result
             assert "Invalid domain" in result["error"]
+
+
+# ============================================================================
+# Entity Registry Tests
+# ============================================================================
+
+class TestEntityRegistry:
+    """Tests for entity registry operations."""
+
+    # --- remove_registry_entity ---
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_preview_default(self, mock_config):
+        """Default call (confirm=False) returns preview with entity details."""
+        from app.hass.registry import remove_registry_entity
+
+        mock_entry = {
+            "entity_id": "light.old_device",
+            "platform": "mqtt",
+            "name": "Old Light",
+            "area_id": "living_room",
+        }
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entry)) as mock_ws:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await remove_registry_entity("light.old_device")
+                assert result["action"] == "preview"
+                assert result["entity_id"] == "light.old_device"
+                assert result["entity_details"] == mock_entry
+                assert result["confirm_required"] is True
+                assert "suggestion" in result
+                # Only the get call should have been made, not remove
+                mock_ws.assert_called_once_with(
+                    "config/entity_registry/get",
+                    entity_id="light.old_device"
+                )
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_preview_shows_platform(self, mock_config):
+        """Preview warning includes the platform name."""
+        from app.hass.registry import remove_registry_entity
+
+        mock_entry = {"entity_id": "light.test", "platform": "hue", "name": None}
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entry)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await remove_registry_entity("light.test")
+                assert "hue" in result["warning"]
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_confirmed(self, mock_config):
+        """confirm=True calls both get + remove WS commands, returns removed_entity."""
+        from app.hass.registry import remove_registry_entity
+
+        mock_entry = {
+            "entity_id": "light.old_device",
+            "platform": "mqtt",
+            "name": "Old Light",
+        }
+        # get returns entity details, remove returns empty dict (like real HA WS API)
+        mock_ws = AsyncMock(side_effect=[mock_entry, {}])
+        with patch('app.hass.registry.call_websocket_api', mock_ws):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await remove_registry_entity("light.old_device", confirm=True)
+                assert result["success"] is True
+                assert result["entity_id"] == "light.old_device"
+                assert result["removed_entity"] == mock_entry
+                # Should have been called twice: get then remove
+                assert mock_ws.call_count == 2
+                mock_ws.assert_any_call(
+                    "config/entity_registry/get",
+                    entity_id="light.old_device"
+                )
+                mock_ws.assert_any_call(
+                    "config/entity_registry/remove",
+                    entity_id="light.old_device"
+                )
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_not_found_on_preview(self, mock_config):
+        """If entity not in registry, error surfaces at preview stage."""
+        from app.hass.registry import remove_registry_entity
+
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(side_effect=Exception("WebSocket API request failed"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await remove_registry_entity("light.nonexistent")
+                assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_remove_entity_validates_entity_id(self, mock_config):
+        """Invalid entity_id is rejected before WS call."""
+        from app.hass.registry import remove_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await remove_registry_entity("../../etc/passwd")
+            assert "error" in result
+            assert "Invalid entity ID" in result["error"]
+
+    # --- update_registry_entity ---
+
+    @pytest.mark.asyncio
+    async def test_update_entity_rename(self, mock_config):
+        """Rename an entity's friendly name."""
+        from app.hass.registry import update_registry_entity
+
+        mock_result = {
+            "entity_entry": {
+                "entity_id": "light.living_room",
+                "name": "Living Room Lamp",
+            }
+        }
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_result)) as mock_ws:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await update_registry_entity("light.living_room", name="Living Room Lamp")
+                assert result["success"] is True
+                mock_ws.assert_called_once_with(
+                    "config/entity_registry/update",
+                    entity_id="light.living_room",
+                    name="Living Room Lamp"
+                )
+
+    @pytest.mark.asyncio
+    async def test_update_entity_disable(self, mock_config):
+        """Disable an entity."""
+        from app.hass.registry import update_registry_entity
+
+        mock_result = {"entity_entry": {"entity_id": "light.test", "disabled_by": "user"}}
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_result)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await update_registry_entity("light.test", disabled_by="user")
+                assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_entity_enable(self, mock_config):
+        """Enable a previously disabled entity by setting disabled_by=None."""
+        from app.hass.registry import update_registry_entity
+
+        mock_result = {"entity_entry": {"entity_id": "light.test", "disabled_by": None}}
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_result)) as mock_ws:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await update_registry_entity("light.test", disabled_by=None)
+                assert result["success"] is True
+                # disabled_by=None should be sent to WS
+                mock_ws.assert_called_once_with(
+                    "config/entity_registry/update",
+                    entity_id="light.test",
+                    disabled_by=None
+                )
+
+    @pytest.mark.asyncio
+    async def test_update_entity_change_entity_id(self, mock_config):
+        """Change an entity's ID."""
+        from app.hass.registry import update_registry_entity
+
+        mock_result = {"entity_entry": {"entity_id": "light.new_name"}}
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_result)) as mock_ws:
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await update_registry_entity("light.old_name", new_entity_id="light.new_name")
+                assert result["success"] is True
+                mock_ws.assert_called_once_with(
+                    "config/entity_registry/update",
+                    entity_id="light.old_name",
+                    new_entity_id="light.new_name"
+                )
+
+    @pytest.mark.asyncio
+    async def test_update_entity_validates_entity_id(self, mock_config):
+        """Invalid entity_id is rejected."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("../evil", name="test")
+            assert "error" in result
+            assert "Invalid entity ID" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_entity_validates_new_entity_id(self, mock_config):
+        """Invalid new_entity_id is rejected."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("light.test", new_entity_id="INVALID")
+            assert "error" in result
+            assert "Invalid entity ID" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_entity_validates_disabled_by(self, mock_config):
+        """Invalid disabled_by value is rejected."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("light.test", disabled_by="config_entry")
+            assert "error" in result
+            assert "disabled_by" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_entity_validates_hidden_by(self, mock_config):
+        """Invalid hidden_by value is rejected."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("light.test", hidden_by="integration")
+            assert "error" in result
+            assert "hidden_by" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_entity_no_changes(self, mock_config):
+        """Calling update with no fields returns error."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("light.test")
+            assert "error" in result
+            assert "No update fields" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_update_entity_name_too_long(self, mock_config):
+        """Name exceeding MAX_ENTITY_NAME_LENGTH is rejected."""
+        from app.hass.registry import update_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await update_registry_entity("light.test", name="x" * 300)
+            assert "error" in result
+            assert "too long" in result["error"]
+
+    # --- get_registry_entity ---
+
+    @pytest.mark.asyncio
+    async def test_get_registry_entity_success(self, mock_config):
+        """Get full registry entry for a single entity."""
+        from app.hass.registry import get_registry_entity
+
+        mock_entry = {
+            "entity_id": "light.living_room",
+            "name": "Living Room",
+            "icon": None,
+            "platform": "hue",
+            "disabled_by": None,
+            "hidden_by": None,
+            "area_id": "living_room",
+        }
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entry)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_registry_entity("light.living_room")
+                assert result["entity_id"] == "light.living_room"
+                assert result["platform"] == "hue"
+
+    @pytest.mark.asyncio
+    async def test_get_registry_entity_not_found(self, mock_config):
+        """Nonexistent entity returns error."""
+        from app.hass.registry import get_registry_entity
+
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(side_effect=Exception("WebSocket API request failed"))):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await get_registry_entity("light.nonexistent")
+                assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_get_registry_entity_validates_entity_id(self, mock_config):
+        """Invalid entity_id is rejected."""
+        from app.hass.registry import get_registry_entity
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await get_registry_entity("../../etc/passwd")
+            assert "error" in result
+            assert "Invalid entity ID" in result["error"]
+
+    # --- list_registry_entities ---
+
+    @pytest.mark.asyncio
+    async def test_list_registry_basic(self, mock_config):
+        """List returns structured result with count."""
+        from app.hass.registry import list_registry_entities
+
+        mock_entries = [
+            {"entity_id": "light.living_room", "name": None, "platform": "hue"},
+            {"entity_id": "sensor.temp", "name": "Temperature", "platform": "mqtt"},
+        ]
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entries)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await list_registry_entities()
+                assert result["count"] == 2
+                assert result["total_available"] == 2
+                assert result["truncated"] is False
+                assert len(result["entities"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_list_registry_domain_filter(self, mock_config):
+        """Domain filter returns only matching entities."""
+        from app.hass.registry import list_registry_entities
+
+        mock_entries = [
+            {"entity_id": "light.living_room", "name": None, "platform": "hue"},
+            {"entity_id": "sensor.temp", "name": "Temperature", "platform": "mqtt"},
+            {"entity_id": "light.kitchen", "name": None, "platform": "hue"},
+        ]
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entries)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await list_registry_entities(domain="light")
+                assert result["count"] == 2
+                assert result["total_available"] == 2
+                assert all("light." in e["entity_id"] for e in result["entities"])
+
+    @pytest.mark.asyncio
+    async def test_list_registry_limit(self, mock_config):
+        """Limit caps the number of returned entities."""
+        from app.hass.registry import list_registry_entities
+
+        mock_entries = [
+            {"entity_id": f"sensor.test_{i}", "name": None, "platform": "mqtt"}
+            for i in range(50)
+        ]
+        with patch('app.hass.registry.call_websocket_api', AsyncMock(return_value=mock_entries)):
+            with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+                result = await list_registry_entities(limit=10)
+                assert result["count"] == 10
+                assert result["total_available"] == 50
+                assert result["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_registry_validates_domain(self, mock_config):
+        """Invalid domain is rejected."""
+        from app.hass.registry import list_registry_entities
+
+        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
+            result = await list_registry_entities(domain="../evil")
+            assert "error" in result
+            assert "Invalid domain" in result["error"]
