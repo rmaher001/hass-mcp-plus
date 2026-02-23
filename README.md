@@ -1,33 +1,22 @@
 # Hass-MCP-Plus
 
-An enhanced Model Context Protocol (MCP) server for Home Assistant integration with Claude and other LLMs, built on [voska/hass-mcp](https://github.com/voska/hass-mcp). Thanks to [Matt Voska](https://github.com/voska) for creating the original project.
+[![PyPI version](https://img.shields.io/pypi/v/hass-mcp-plus)](https://pypi.org/project/hass-mcp-plus/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker Pulls](https://img.shields.io/docker/pulls/rmaher001/hass-mcp-plus)](https://hub.docker.com/r/rmaher001/hass-mcp-plus)
+[![Tests](https://img.shields.io/badge/tests-167%20passed-brightgreen)](https://github.com/rmaher001/hass-mcp-plus)
 
-**What's new in Plus:**
-- Automation trace debugging (list and inspect execution traces)
-- Enhanced historical data tools (statistics with date ranges)
-- Improved token efficiency for LLM context management
-- WebSocket API for error log retrieval
+A complete rewrite of [voska/hass-mcp](https://github.com/voska/hass-mcp) — an MCP server for Home Assistant built for token efficiency, security hardening, and context flooding prevention. Thanks to [Matt Voska](https://github.com/voska) for the original project.
 
-## Overview
-
-Hass-MCP-Plus enables AI assistants like Claude to interact directly with your Home Assistant instance, allowing them to:
-
-- Query the state of devices and sensors
-- Control lights, switches, and other entities
-- Get summaries of your smart home
-- Troubleshoot automations and entities
-- Search for specific entities
-- Create guided conversations for common tasks
-
-## Features
-
-- **Entity Management**: Get states, control devices, and search for entities
-- **Domain Summaries**: Get high-level information about entity types
-- **Automation Support**: List automations and debug with execution traces
-- **Historical Data**: Query statistics and history with date range support
-- **Guided Conversations**: Use prompts for common tasks like creating automations
-- **Smart Search**: Find entities by name, type, or state
-- **Token Efficiency**: Lean JSON responses to minimize context usage
+**Features:**
+- 24 tools covering entity control, registry management, statistics, logs, and automation debugging
+- CEL expression filtering for complex entity queries (e.g., "all battery sensors below 20%")
+- Entity registry management with safe two-phase delete
+- Long-term statistics with hourly/daily/weekly/monthly aggregation and date range support
+- Core journal log access with debug-level and integration filtering
+- Automation trace inspection for debugging failed runs
+- Configurable output formats (lean/compact/detailed)
+- Input validation, error sanitization, and context flooding prevention across all calls
+- Works with Claude Desktop, Claude Code, Cursor, and other MCP clients
 
 ## Installation
 
@@ -133,6 +122,15 @@ docker pull rmaher001/hass-mcp-plus:latest
 
 3. The "Hass-MCP-Plus" tool should now appear in your Claude Desktop tools menu
 
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HA_URL` | Yes | Home Assistant URL (e.g., `http://192.168.1.100:8123`) |
+| `HA_TOKEN` | Yes | Home Assistant Long-Lived Access Token |
+| `HA_VERIFY_SSL` | No | Set to `true` to enable SSL certificate verification (default: `false`). Useful when using HTTPS with self-signed certificates. |
+| `TZ` | No | Timezone (e.g., `America/Los_Angeles`) |
+
 ## Other MCP Clients
 
 ### Cursor
@@ -167,52 +165,52 @@ Here are some examples of prompts you can use with Claude once Hass-MCP-Plus is 
 
 - "What's the current state of my living room lights?"
 - "Turn off all the lights in the kitchen"
-- "List all my sensors that contain temperature data"
+- "Find all battery sensors below 20%"
 - "Give me a summary of my climate entities"
-- "Create an automation that turns on the lights at sunset"
-- "Help me troubleshoot why my bedroom motion sensor automation isn't working"
+- "Show me the hourly temperature statistics for the last week"
+- "Why didn't my motion sensor automation fire last night?"
+- "List all unavailable or unknown entities"
+- "Disable the orphaned sensor that no longer exists"
+- "Show me the debug logs for the MQTT integration"
 - "Search for entities related to my living room"
 
 ## Available Tools
 
-Hass-MCP-Plus provides several tools for interacting with Home Assistant:
+Hass-MCP-Plus provides 24 tools for interacting with Home Assistant:
 
 ### Entity Management
 - `get_entity`: Get the state of a specific entity with optional field filtering
-- `entity_action`: Perform actions on entities (turn on, off, toggle)
-- `list_entities`: Get a list of entities with optional domain filtering and search
-- `search_entities_tool`: Search for entities matching a query
-- `domain_summary_tool`: Get a summary of a domain's entities
+- `entity_action`: Perform actions on entities (turn on, off, toggle) with domain-specific parameters
+- `list_entities`: Get entities with domain filtering, search, and output format options (lean/compact/detailed)
+- `search_entities`: Search for entities matching a query string across IDs, names, and attributes
+- `query_entities`: Filter entities using CEL expressions with numeric comparisons and boolean logic
+- `domain_summary`: Get a summary of a domain's entities with state distribution and examples
 - `system_overview`: Get a comprehensive overview of the entire Home Assistant system
 
+### Entity Registry
+- `get_entity_registry`: Get detailed registry entry for a single entity (platform, device, area, status)
+- `list_entity_registry`: List all registry entries with optional domain filter (for auditing and bulk management)
+- `update_entity`: Update entity properties — rename, change icon, assign area, disable/enable, hide/unhide
+- `remove_entity`: Remove an entity from the registry (requires explicit `confirm=True` flag)
+
 ### Automation & Debugging
-- `list_automations`: Get a list of all automations
+- `list_automations`: Get all automations with pagination support
 - `list_automation_traces`: Get recent execution traces for a specific automation
-- `get_automation_trace`: Get detailed trace for a specific automation run
-- `get_error_log`: Get the Home Assistant error log
+- `get_automation_trace`: Get detailed trace for a specific automation run (trigger, conditions, actions, errors)
+- `get_error_log`: Get the Home Assistant error log with integration/level filtering
+- `get_core_logs`: Get core journal logs (DEBUG/INFO/WARNING/ERROR) with integration/pattern filtering
+- `set_log_level`: Set log level for any integration (enable debug logging, then read with `get_core_logs`)
 
 ### Historical Data
-- `get_history`: Get raw state history of an entity
-- `get_history_range`: Get state history for a specific date/time range
-- `get_statistics`: Get aggregated statistics (mean, min, max) for an entity
-- `get_statistics_range`: Get statistics for a specific date/time range
+- `get_history`: Get raw state change history with automatic pagination and sampling
+- `get_history_range`: Get state changes for a specific date/time range with sampling strategies
+- `get_statistics`: Get aggregated statistics (mean, min, max) with configurable periods (5min/hour/day/week/month)
+- `get_statistics_range`: Get long-term statistics for any date range — the best tool for historical analysis
 
 ### System
 - `get_version`: Get the Home Assistant version
-- `call_service_tool`: Call any Home Assistant service
+- `call_service`: Call any Home Assistant service (low-level API access)
 - `restart_ha`: Restart Home Assistant
-
-## Prompts for Guided Conversations
-
-Hass-MCP-Plus includes several prompts for guided conversations:
-
-- `create_automation`: Guide for creating Home Assistant automations based on trigger type
-- `debug_automation`: Troubleshooting help for automations that aren't working
-- `troubleshoot_entity`: Diagnose issues with entities
-- `routine_optimizer`: Analyze usage patterns and suggest optimized routines based on actual behavior
-- `automation_health_check`: Review all automations, find conflicts, redundancies, or improvement opportunities
-- `entity_naming_consistency`: Audit entity names and suggest standardization improvements
-- `dashboard_layout_generator`: Create optimized dashboards based on user preferences and usage patterns
 
 ## Available Resources
 
@@ -229,7 +227,7 @@ Hass-MCP-Plus provides the following resource endpoints:
 ### Running Tests
 
 ```bash
-uv run pytest tests/
+uv run pytest tests/ -v
 ```
 
 ## License

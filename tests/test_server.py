@@ -174,23 +174,6 @@ class TestMCPServer:
             assert tool_function.__doc__ is not None, f"{tool_name} missing docstring"
             assert len(tool_function.__doc__.strip()) > 10, f"{tool_name} has insufficient docstring"
     
-    def test_prompt_functions_exist(self):
-        """Test that prompt functions exist in the server module."""
-        # Import the server module directly
-        import app.server
-        
-        # List of expected prompt functions
-        expected_prompts = [
-            "create_automation",
-            "debug_automation",
-            "troubleshoot_entity"
-        ]
-        
-        # Check that each expected prompt function exists
-        for prompt_name in expected_prompts:
-            assert hasattr(app.server, prompt_name)
-            assert callable(getattr(app.server, prompt_name))
-            
     @pytest.mark.asyncio
     async def test_search_entities_resource(self):
         """Test the search_entities function"""
