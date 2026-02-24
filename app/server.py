@@ -1,7 +1,5 @@
 import functools
 import logging
-import json
-import httpx
 from typing import List, Dict, Any, Optional, Callable, Awaitable, TypeVar, cast
 
 # Set up logging
@@ -34,7 +32,6 @@ from app.hass import (
     DEFAULT_ERROR_LOG_LIMIT, MAX_ERROR_LOG_LIMIT,
     DEFAULT_CORE_LOG_LIMIT, MAX_CORE_LOG_LIMIT,
     DEFAULT_AUTOMATION_LIMIT, MAX_AUTOMATION_LIMIT,
-    DEFAULT_ALL_ENTITIES_LIMIT, DEFAULT_DOMAIN_ENTITIES_LIMIT,
     VALID_SAMPLE_STRATEGIES,
     # Domain-specific attributes for lean formatting
     DOMAIN_IMPORTANT_ATTRIBUTES
@@ -45,8 +42,6 @@ T = TypeVar('T')
 
 # Create an MCP server
 from mcp.server.fastmcp import FastMCP
-from mcp.server.stdio import stdio_server
-import mcp.types as types
 mcp = FastMCP("Hass-MCP")
 
 def async_handler(command_type: str):
@@ -165,108 +160,6 @@ async def entity_action(entity_id: str, action: str, params: Optional[Dict[str, 
     logger.info(f"Performing action '{action}' on entity: {entity_id} with params: {sanitize_for_logging(params)}")
     return await hass_call_service(domain, service, data)
 
-@mcp.resource("hass://entities/{entity_id}")
-@async_handler("get_entity_resource")
-async def get_entity_resource(entity_id: str) -> str:
-    """
-    Get the state of a Home Assistant entity as a resource
-    
-    This endpoint provides a standard view with common entity information.
-    For comprehensive attribute details, use the /detailed endpoint.
-    
-    Args:
-        entity_id: The entity ID to get information for
-    """
-    logger.info(f"Getting entity resource: {entity_id}")
-    
-    # Get the entity state with caching (using lean format for token efficiency)
-    state = await get_entity_state(entity_id, lean=True)
-    
-    # Check if there was an error
-    if "error" in state:
-        return f"# Entity: {entity_id}\n\nError retrieving entity: {state['error']}"
-    
-    # Format the entity as markdown
-    result = f"# Entity: {entity_id}\n\n"
-    
-    # Get friendly name if available
-    friendly_name = state.get("attributes", {}).get("friendly_name")
-    if friendly_name and friendly_name != entity_id:
-        result += f"**Name**: {friendly_name}\n\n"
-    
-    # Add state
-    result += f"**State**: {state.get('state')}\n\n"
-    
-    # Add domain info
-    domain = entity_id.split(".")[0]
-    result += f"**Domain**: {domain}\n\n"
-    
-    # Add key attributes based on domain type
-    attributes = state.get("attributes", {})
-    
-    # Add a curated list of important attributes
-    important_attrs = []
-    
-    # Common attributes across many domains
-    common_attrs = ["device_class", "unit_of_measurement", "friendly_name"]
-    
-    # Domain-specific important attributes
-    if domain == "light":
-        important_attrs = ["brightness", "color_temp", "rgb_color", "supported_features", "supported_color_modes"] 
-    elif domain == "sensor":
-        important_attrs = ["unit_of_measurement", "device_class", "state_class"]
-    elif domain == "climate":
-        important_attrs = ["hvac_mode", "hvac_action", "temperature", "current_temperature", "target_temp_*"]
-    elif domain == "media_player":
-        important_attrs = ["media_title", "media_artist", "source", "volume_level", "media_content_type"]
-    elif domain == "switch" or domain == "binary_sensor":
-        important_attrs = ["device_class", "is_on"]
-    
-    # Combine with common attributes
-    important_attrs.extend(common_attrs)
-    
-    # Deduplicate the list while preserving order
-    important_attrs = list(dict.fromkeys(important_attrs))
-    
-    # Create and add the important attributes section
-    result += "## Key Attributes\n\n"
-    
-    # Display only the important attributes that exist
-    displayed_attrs = 0
-    for attr_name in important_attrs:
-        # Handle wildcard attributes (e.g., target_temp_*)
-        if attr_name.endswith("*"):
-            prefix = attr_name[:-1]
-            matching_attrs = [name for name in attributes if name.startswith(prefix)]
-            for name in matching_attrs:
-                result += f"- **{name}**: {attributes[name]}\n"
-                displayed_attrs += 1
-        # Regular attribute match
-        elif attr_name in attributes:
-            attr_value = attributes[attr_name]
-            if isinstance(attr_value, (list, dict)) and len(str(attr_value)) > 100:
-                result += f"- **{attr_name}**: *[Complex data]*\n"
-            else:
-                result += f"- **{attr_name}**: {attr_value}\n"
-            displayed_attrs += 1
-    
-    # If no important attributes were found, show a message
-    if displayed_attrs == 0:
-        result += "No key attributes found for this entity type.\n\n"
-    
-    # Add attribute count and link to detailed view
-    total_attr_count = len(attributes)
-    if total_attr_count > displayed_attrs:
-        hidden_count = total_attr_count - displayed_attrs
-        result += f"\n**Note**: Showing {displayed_attrs} of {total_attr_count} total attributes. "
-        result += f"{hidden_count} additional attributes are available in the [detailed view](/api/resource/hass://entities/{entity_id}/detailed).\n\n"
-    
-    # Add last updated time if available
-    if "last_updated" in state:
-        result += f"**Last Updated**: {state['last_updated']}\n"
-    
-    return result
-
 @mcp.tool()
 @async_handler("list_entities")
 async def list_entities(
@@ -340,86 +233,6 @@ async def list_entities(
         lean=not detailed,  # Use lean format unless detailed is requested
         compact=compact
     )
-
-@mcp.resource("hass://entities")
-@async_handler("get_all_entities_resource")
-async def get_all_entities_resource() -> str:
-    """
-    Get a list of Home Assistant entities as a resource (LIMITED to prevent context flooding)
-
-    CONTEXT FLOODING PREVENTION:
-    - Output is LIMITED to 200 entities by default
-    - For full entity lists, use the list_entities tool with pagination
-
-    Returns:
-        A markdown formatted string listing entities grouped by domain
-
-    Examples:
-        ```
-        # Get entities (limited)
-        entities = mcp.get_resource("hass://entities")
-        ```
-
-    Best Practices:
-        - Prefer domain-filtered endpoints: hass://entities/domain/{domain}
-        - For overview information, use domain summaries instead of full entity lists
-        - Use the list_entities tool for more control over results
-    """
-    logger.info("Getting all entities as a resource (limited)")
-
-    # Get all entities first to count total, but use compact mode
-    all_entities = await get_entities(limit=0, compact=True)  # limit=0 means no limit
-
-    # Check if there was an error
-    if isinstance(all_entities, dict) and "error" in all_entities:
-        return f"Error retrieving entities: {all_entities['error']}"
-    if len(all_entities) == 1 and isinstance(all_entities[0], dict) and "error" in all_entities[0]:
-        return f"Error retrieving entities: {all_entities[0]['error']}"
-
-    total_count = len(all_entities)
-    truncated = total_count > DEFAULT_ALL_ENTITIES_LIMIT
-
-    # Apply limit
-    entities = all_entities[:DEFAULT_ALL_ENTITIES_LIMIT] if truncated else all_entities
-
-    # Format the entities as a string
-    result = "# Home Assistant Entities\n\n"
-
-    if truncated:
-        result += f"⚠️ **TRUNCATED**: Showing {len(entities)} of {total_count} entities\n\n"
-        result += "To see more entities, use:\n"
-        result += "- `list_entities` tool with higher limit\n"
-        result += "- Domain-filtered endpoints: `hass://entities/domain/{domain}`\n\n"
-    else:
-        result += f"Total entities: {total_count}\n\n"
-
-    result += "**Tip**: For better token efficiency, consider using:\n"
-    result += "- Domain filtering: `hass://entities/domain/{domain}`\n"
-    result += "- Domain summaries: `hass://entities/domain/{domain}/summary`\n"
-    result += "- Entity search: `hass://search/{query}`\n\n"
-
-    # Group entities by domain for better organization
-    domains = {}
-    for entity in entities:
-        domain = entity["entity_id"].split(".")[0]
-        if domain not in domains:
-            domains[domain] = []
-        domains[domain].append(entity)
-
-    # Build the string with entities grouped by domain
-    for domain in sorted(domains.keys()):
-        domain_count = len(domains[domain])
-        result += f"## {domain.capitalize()} ({domain_count})\n\n"
-        for entity in sorted(domains[domain], key=lambda e: e["entity_id"]):
-            # Get a friendly name if available (compact mode has friendly_name at top level)
-            friendly_name = entity.get("friendly_name", "")
-            result += f"- **{entity['entity_id']}**: {entity['state']}"
-            if friendly_name and friendly_name != entity["entity_id"]:
-                result += f" ({friendly_name})"
-            result += "\n"
-        result += "\n"
-
-    return result
 
 @mcp.tool()
 @async_handler("search_entities")
@@ -506,99 +319,7 @@ async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
         "domains": domains_count,
         "query": query
     }
-    
-@mcp.resource("hass://search/{query}/{limit}")
-@async_handler("search_entities_resource_with_limit")
-async def search_entities_resource_with_limit(query: str, limit: str) -> str:
-    """
-    Search for entities matching a query string with a specified result limit
-    
-    This endpoint extends the basic search functionality by allowing you to specify
-    a custom limit on the number of results returned. It's useful for both broader
-    searches (larger limit) and more focused searches (smaller limit).
-    
-    Args:
-        query: The search query to match against entity IDs, names, and attributes
-        limit: Maximum number of entities to return (as a string, will be converted to int)
-    
-    Returns:
-        A markdown formatted string with search results and a JSON summary
-        
-    Examples:
-        ```
-        # Search with a larger limit (up to 50 results)
-        results = mcp.get_resource("hass://search/sensor/50")
-        
-        # Search with a smaller limit for focused results
-        results = mcp.get_resource("hass://search/kitchen/5")
-        ```
-        
-    Best Practices:
-        - Use smaller limits (5-10) for focused searches where you need just a few matches
-        - Use larger limits (30-50) for broader searches when you need more comprehensive results
-        - Balance larger limits against token usage - more results means more tokens
-        - Consider domain-specific searches for better precision: "light kitchen" instead of just "kitchen"
-    """
-    try:
-        limit_int = int(limit)
-        if limit_int <= 0:
-            limit_int = 20
-    except ValueError:
-        limit_int = 20
-        
-    logger.info(f"Searching for entities matching: '{query}' with custom limit: {limit_int}")
-    
-    if not query or not query.strip():
-        return "# Entity Search\n\nError: No search query provided"
-    
-    entities = await get_entities(search_query=query, limit=limit_int, lean=True)
-    
-    # Check if there was an error
-    if isinstance(entities, dict) and "error" in entities:
-        return f"# Entity Search\n\nError retrieving entities: {entities['error']}"
-    
-    # Format the search results
-    result = f"# Entity Search Results for '{query}' (Limit: {limit_int})\n\n"
-    
-    if not entities:
-        result += "No entities found matching your search query.\n"
-        return result
-    
-    result += f"Found {len(entities)} matching entities:\n\n"
-    
-    # Group entities by domain for better organization
-    domains = {}
-    for entity in entities:
-        domain = entity["entity_id"].split(".")[0]
-        if domain not in domains:
-            domains[domain] = []
-        domains[domain].append(entity)
-    
-    # Build the string with entities grouped by domain
-    for domain in sorted(domains.keys()):
-        result += f"## {domain.capitalize()}\n\n"
-        for entity in sorted(domains[domain], key=lambda e: e["entity_id"]):
-            # Get a friendly name if available
-            friendly_name = entity.get("attributes", {}).get("friendly_name", entity["entity_id"])
-            result += f"- **{entity['entity_id']}**: {entity['state']}"
-            if friendly_name != entity["entity_id"]:
-                result += f" ({friendly_name})"
-            result += "\n"
-        result += "\n"
-    
-    # Add a more structured summary section for easy LLM processing
-    result += "## Summary in JSON format\n\n"
-    result += "```json\n"
-    
-    # Create a simplified JSON representation with only essential fields
-    simplified_entities = [_simplify_entity(entity) for entity in entities]
-    
-    result += json.dumps(simplified_entities, indent=2)
-    result += "\n```\n"
-    
-    return result
 
-# The domain_summary is already implemented, no need to duplicate it
 
 @mcp.tool()
 @async_handler("domain_summary")
@@ -649,178 +370,6 @@ async def system_overview() -> Dict[str, Any]:
     logger.info("Generating complete system overview")
     return await get_system_overview()
 
-@mcp.resource("hass://entities/{entity_id}/detailed")
-@async_handler("get_entity_resource_detailed")
-async def get_entity_resource_detailed(entity_id: str) -> str:
-    """
-    Get detailed information about a Home Assistant entity as a resource
-    
-    Use this detailed view selectively when you need to:
-    - Understand all available attributes of an entity
-    - Debug entity behavior or capabilities
-    - See comprehensive state information
-    
-    For routine operations where you only need basic state information,
-    prefer the standard entity endpoint or specify fields in the get_entity tool.
-    
-    Args:
-        entity_id: The entity ID to get information for
-    """
-    logger.info(f"Getting detailed entity resource: {entity_id}")
-    
-    # Get all fields, no filtering (detailed view explicitly requests all data)
-    state = await get_entity_state(entity_id, lean=False)
-    
-    # Check if there was an error
-    if "error" in state:
-        return f"# Entity: {entity_id}\n\nError retrieving entity: {state['error']}"
-    
-    # Format the entity as markdown
-    result = f"# Entity: {entity_id} (Detailed View)\n\n"
-    
-    # Get friendly name if available
-    friendly_name = state.get("attributes", {}).get("friendly_name")
-    if friendly_name and friendly_name != entity_id:
-        result += f"**Name**: {friendly_name}\n\n"
-    
-    # Add state
-    result += f"**State**: {state.get('state')}\n\n"
-    
-    # Add domain and entity type information
-    domain = entity_id.split(".")[0]
-    result += f"**Domain**: {domain}\n\n"
-    
-    # Add usage guidance
-    result += "## Usage Note\n"
-    result += "This is the detailed view showing all entity attributes. For token-efficient interactions, "
-    result += "consider using the standard entity endpoint or the get_entity tool with field filtering.\n\n"
-    
-    # Add all attributes with full details
-    attributes = state.get("attributes", {})
-    if attributes:
-        result += "## Attributes\n\n"
-        
-        # Sort attributes for better organization
-        sorted_attrs = sorted(attributes.items())
-        
-        # Format each attribute with complete information
-        for attr_name, attr_value in sorted_attrs:
-            # Format the attribute value
-            if isinstance(attr_value, (list, dict)):
-                attr_str = json.dumps(attr_value, indent=2)
-                result += f"- **{attr_name}**:\n```json\n{attr_str}\n```\n"
-            else:
-                result += f"- **{attr_name}**: {attr_value}\n"
-    
-    # Add context data section
-    result += "\n## Context Data\n\n"
-    
-    # Add last updated time if available
-    if "last_updated" in state:
-        result += f"**Last Updated**: {state['last_updated']}\n"
-    
-    # Add last changed time if available
-    if "last_changed" in state:
-        result += f"**Last Changed**: {state['last_changed']}\n"
-    
-    # Add entity ID and context information
-    if "context" in state:
-        context = state["context"]
-        result += f"**Context ID**: {context.get('id', 'N/A')}\n"
-        if "parent_id" in context:
-            result += f"**Parent Context**: {context['parent_id']}\n"
-        if "user_id" in context:
-            result += f"**User ID**: {context['user_id']}\n"
-    
-    # Add related entities suggestions
-    related_domains = []
-    if domain == "light":
-        related_domains = ["switch", "scene", "automation"]
-    elif domain == "sensor":
-        related_domains = ["binary_sensor", "input_number", "utility_meter"]
-    elif domain == "climate":
-        related_domains = ["sensor", "switch", "fan"]
-    elif domain == "media_player":
-        related_domains = ["remote", "switch", "sensor"]
-    
-    if related_domains:
-        result += "\n## Related Entity Types\n\n"
-        result += "You may want to check entities in these related domains:\n"
-        for related in related_domains:
-            result += f"- {related}\n"
-    
-    return result
-
-@mcp.resource("hass://entities/domain/{domain}")
-@async_handler("list_states_by_domain_resource")
-async def list_states_by_domain_resource(domain: str) -> str:
-    """
-    Get a list of entities for a specific domain as a resource (LIMITED to prevent context flooding)
-
-    CONTEXT FLOODING PREVENTION:
-    - Output is LIMITED to 100 entities per domain
-    - For more entities, use the list_entities tool with domain filter
-
-    Args:
-        domain: The domain to filter by (e.g., 'light', 'switch', 'sensor')
-
-    Returns:
-        A markdown formatted string with entities in the specified domain
-
-    Examples:
-        ```
-        # Get lights (limited)
-        lights = mcp.get_resource("hass://entities/domain/light")
-
-        # Get sensors (limited)
-        sensors = mcp.get_resource("hass://entities/domain/sensor")
-        ```
-
-    Best Practices:
-        - For a concise overview, use the domain summary: hass://entities/domain/{domain}/summary
-        - Use the list_entities tool with domain filter for more control
-        - For high-count domains (sensor, binary_sensor), use search to narrow results
-    """
-    logger.info(f"Getting entities for domain: {domain} (limited)")
-
-    # Get all entities for the specified domain first to count (using compact for efficiency)
-    all_entities = await get_entities(domain=domain, limit=0, compact=True)
-
-    # Check if there was an error
-    if isinstance(all_entities, dict) and "error" in all_entities:
-        return f"Error retrieving entities: {all_entities['error']}"
-
-    total_count = len(all_entities)
-    truncated = total_count > DEFAULT_DOMAIN_ENTITIES_LIMIT
-
-    # Apply limit
-    entities = all_entities[:DEFAULT_DOMAIN_ENTITIES_LIMIT] if truncated else all_entities
-
-    # Format the entities as a string
-    result = f"# {domain.capitalize()} Entities\n\n"
-
-    if truncated:
-        result += f"⚠️ **TRUNCATED**: Showing {len(entities)} of {total_count} {domain} entities\n\n"
-        result += "To see more, use:\n"
-        result += f"- `list_entities(domain=\"{domain}\", limit=200)` tool\n"
-        result += f"- Domain summary: `hass://entities/domain/{domain}/summary`\n\n"
-    else:
-        result += f"Total: {total_count} entities\n\n"
-
-    # List the entities
-    for entity in sorted(entities, key=lambda e: e["entity_id"]):
-        # Get a friendly name if available (compact mode has friendly_name at top level)
-        friendly_name = entity.get("friendly_name", entity["entity_id"])
-        result += f"- **{entity['entity_id']}**: {entity['state']}"
-        if friendly_name != entity["entity_id"]:
-            result += f" ({friendly_name})"
-        result += "\n"
-
-    # Add link to summary
-    result += f"\n## Related Resources\n\n"
-    result += f"- [View domain summary](/api/resource/hass://entities/domain/{domain}/summary)\n"
-
-    return result
 
 # Automation management MCP tools
 @mcp.tool()
@@ -990,7 +539,7 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
     """
     logger.info(f"Calling Home Assistant service: {domain}.{service} with data: {sanitize_for_logging(data)}")
     return await hass_call_service(domain, service, data or {})
-# Documentation endpoint
+
 @mcp.tool()
 @async_handler("get_history")
 async def get_history(

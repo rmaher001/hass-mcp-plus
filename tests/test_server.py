@@ -55,12 +55,22 @@ class TestMCPServer:
             "get_entity",
             "list_entities",
             "entity_action",
-            "domain_summary",  # Domain summaries tool
+            "search_entities",
+            "domain_summary",
+            "system_overview",
             "call_service",
             "restart_ha",
             "list_automations",
+            "list_automation_traces",
+            "get_automation_trace",
+            "get_error_log",
             "get_core_logs",
             "set_log_level",
+            "get_history",
+            "get_history_range",
+            "get_statistics",
+            "get_statistics_range",
+            "query_entities",
             "remove_entity",
             "update_entity",
             "get_entity_registry",
@@ -72,25 +82,6 @@ class TestMCPServer:
             assert hasattr(app.server, tool_name)
             assert callable(getattr(app.server, tool_name))
     
-    def test_resource_functions_exist(self):
-        """Test that resource functions exist in the server module."""
-        # Import the server module directly
-        import app.server
-        
-        # List of expected resource functions - Use only the ones actually in server.py
-        expected_resources = [
-            "get_entity_resource", 
-            "get_entity_resource_detailed",
-            "get_all_entities_resource", 
-            "list_states_by_domain_resource",     # Domain-specific resource
-            "search_entities_resource_with_limit"  # Search resource with limit parameter
-        ]
-        
-        # Check that each expected resource function exists
-        for resource_name in expected_resources:
-            assert hasattr(app.server, resource_name)
-            assert callable(getattr(app.server, resource_name))
-            
     @pytest.mark.asyncio
     async def test_list_automations_error_handling(self):
         """Test that list_automations handles errors properly."""
@@ -152,15 +143,22 @@ class TestMCPServer:
             "get_entity",
             "list_entities",
             "entity_action",
+            "search_entities",
             "domain_summary",
+            "system_overview",
             "call_service",
             "restart_ha",
             "list_automations",
-            "search_entities",
-            "system_overview",
+            "list_automation_traces",
+            "get_automation_trace",
             "get_error_log",
             "get_core_logs",
             "set_log_level",
+            "get_history",
+            "get_history_range",
+            "get_statistics",
+            "get_statistics_range",
+            "query_entities",
             "remove_entity",
             "update_entity",
             "get_entity_registry",
