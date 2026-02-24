@@ -16,7 +16,6 @@ from app.hass.constants import (
     RUN_ID_PATTERN,
     VALID_TRACE_DOMAINS,
     MAX_SERVICE_PAYLOAD_BYTES,
-    MAX_TEMPLATE_LENGTH,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,35 +185,6 @@ def validate_service_payload(
         )
 
     return data
-
-
-def validate_template(
-    template: str,
-    max_length: int = MAX_TEMPLATE_LENGTH,
-) -> str:
-    """
-    Validate template string.
-
-    Args:
-        template: The template string to validate
-        max_length: Maximum allowed length
-
-    Returns:
-        The validated template
-
-    Raises:
-        ValidationError: If template is invalid or too large
-    """
-    if not template or not isinstance(template, str):
-        raise ValidationError("Template must be a non-empty string")
-
-    if len(template) > max_length:
-        raise ValidationError(
-            f"Template too large: {len(template):,} characters "
-            f"(maximum: {max_length:,} characters)"
-        )
-
-    return template
 
 
 def safe_url_path_segment(segment: str) -> str:

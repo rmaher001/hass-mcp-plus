@@ -9,7 +9,7 @@ import re
 
 import ssl
 
-from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, render_template, evaluate_cel_filter
+from app.hass import get_entity_state, call_service, get_entities, get_automations, handle_api_errors, evaluate_cel_filter
 
 class TestHassAPI:
     """Test the Home Assistant API functions."""
@@ -597,96 +597,6 @@ class TestContextFloodingPrevention:
                     assert "truncated" in result
                     assert "start_time" in result
                     assert "end_time" in result
-
-
-class TestRenderTemplate:
-    """Test the render_template function."""
-
-    @pytest.mark.asyncio
-    async def test_render_template_success_list(self, mock_config):
-        """Test successful template rendering that returns a list."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = '[{"entity_id": "light.test", "state": "on", "attributes": {"friendly_name": "Test Light"}}]'
-
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch('app.hass.templates.get_client', return_value=mock_client):
-            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
-                    result = await render_template("{{ states.light | list }}")
-
-                    # Should parse as JSON list
-                    assert isinstance(result, list)
-                    assert len(result) == 1
-                    assert result[0]["entity_id"] == "light.test"
-                    assert result[0]["state"] == "on"
-
-                    # Verify API was called correctly
-                    mock_client.post.assert_called_once()
-                    called_url = mock_client.post.call_args[0][0]
-                    assert called_url == f"{mock_config['hass_url']}/api/template"
-                    called_json = mock_client.post.call_args[1]["json"]
-                    assert called_json["template"] == "{{ states.light | list }}"
-
-    @pytest.mark.asyncio
-    async def test_render_template_success_string(self, mock_config):
-        """Test successful template rendering that returns a string."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = "Hello World"
-
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch('app.hass.templates.get_client', return_value=mock_client):
-            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
-                    result = await render_template("{{ 'Hello World' }}")
-
-                    # Should return as string (not JSON parseable)
-                    assert isinstance(result, str)
-                    assert result == "Hello World"
-
-    @pytest.mark.asyncio
-    async def test_render_template_error(self, mock_config):
-        """Test template rendering error."""
-        mock_response = MagicMock()
-        mock_response.status_code = 400
-        mock_response.text = "UndefinedError: 'invalid_var' is undefined"
-
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch('app.hass.templates.get_client', return_value=mock_client):
-            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
-                    result = await render_template("{{ invalid_var }}")
-
-                    # Should return error dict
-                    assert isinstance(result, dict)
-                    assert "error" in result
-                    assert "Template rendering failed" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_render_template_empty_list(self, mock_config):
-        """Test template rendering that returns an empty list."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = "[]"
-
-        mock_client = MagicMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-
-        with patch('app.hass.templates.get_client', return_value=mock_client):
-            with patch('app.hass.templates.HA_URL', mock_config["hass_url"]):
-                with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
-                    result = await render_template("{{ states.nonexistent | list }}")
-
-                    # Should return empty list
-                    assert isinstance(result, list)
-                    assert len(result) == 0
 
 
 class TestCELFiltering:
@@ -1544,22 +1454,6 @@ class TestValidation:
         with pytest.raises(ValidationError, match="JSON-serializable"):
             validate_service_payload({"func": lambda x: x})
 
-    # --- Template Validation ---
-
-    def test_validate_template_valid(self):
-        from app.hass.validation import validate_template
-        assert validate_template("{{ states.light.test.state }}") == "{{ states.light.test.state }}"
-
-    def test_validate_template_too_large(self):
-        from app.hass.validation import validate_template, ValidationError
-        with pytest.raises(ValidationError, match="too large"):
-            validate_template("x" * 70_000)
-
-    def test_validate_template_empty(self):
-        from app.hass.validation import validate_template, ValidationError
-        with pytest.raises(ValidationError, match="non-empty"):
-            validate_template("")
-
     # --- URL Path Encoding ---
 
     def test_safe_url_path_segment(self):
@@ -1644,15 +1538,6 @@ class TestSecurityIntegration:
                     await call_service("light", "turn_on", {"entity_id": "light.test"})
                     called_url = mock_client.post.call_args[0][0]
                     assert called_url == f"{mock_config['hass_url']}/api/services/light/turn_on"
-
-    @pytest.mark.asyncio
-    async def test_render_template_validates_size(self, mock_config):
-        """Template rendering rejects oversized templates."""
-        with patch('app.hass.decorators.HA_TOKEN', mock_config["hass_token"]):
-            result = await render_template("x" * 70_000)
-            # render_template returns Any, so error is a plain string
-            assert isinstance(result, str)
-            assert "too large" in result
 
     @pytest.mark.asyncio
     async def test_error_messages_do_not_leak_ha_url(self, mock_config):

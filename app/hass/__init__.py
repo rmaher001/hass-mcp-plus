@@ -36,7 +36,6 @@ from app.hass.constants import (  # noqa: F401
     RUN_ID_PATTERN,
     VALID_TRACE_DOMAINS,
     MAX_SERVICE_PAYLOAD_BYTES,
-    MAX_TEMPLATE_LENGTH,
     MAX_HISTORY_RAW_RECORDS,
     MAX_ENTITY_NAME_LENGTH,
     VALID_DISABLED_BY,
@@ -54,7 +53,6 @@ from app.hass.validation import (  # noqa: F401
     validate_run_id,
     validate_trace_domain,
     validate_service_payload,
-    validate_template,
     safe_url_path_segment,
 )
 
@@ -138,6 +136,3 @@ from app.hass.registry import (  # noqa: F401
     get_registry_entity,
     list_registry_entities,
 )
-
-# --- templates ---
-from app.hass.templates import render_template  # noqa: F401

@@ -21,7 +21,7 @@ from app.hass import (
     get_hass_error_log, get_entity_history, get_entity_history_range,
     list_automation_traces as hass_list_automation_traces,
     get_automation_trace as hass_get_automation_trace,
-    sanitize_for_logging, render_template,
+    sanitize_for_logging,
     get_all_entity_states, evaluate_cel_filter,
     get_hass_core_logs, set_hass_log_level,
     remove_registry_entity, update_registry_entity,

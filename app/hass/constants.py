@@ -25,9 +25,6 @@ VALID_TRACE_DOMAINS = frozenset(["automation", "script"])
 # Service call payload size limit (bytes)
 MAX_SERVICE_PAYLOAD_BYTES = 1_048_576  # 1 MB
 
-# Template string maximum length (characters)
-MAX_TEMPLATE_LENGTH = 65_536  # 64 KB
-
 # Hard cap on records parsed from history API response (memory exhaustion protection)
 MAX_HISTORY_RAW_RECORDS = 10_000
 

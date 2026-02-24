@@ -48,7 +48,6 @@ _GET_CLIENT_MODULES = [
     'app.hass.history',
     'app.hass.logging_ha',
     'app.hass.summary',
-    'app.hass.templates',
 ]
 
 @pytest.fixture(autouse=True)
