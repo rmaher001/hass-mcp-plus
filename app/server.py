@@ -84,12 +84,7 @@ def _simplify_entity(entity: dict) -> dict:
 @mcp.tool()
 @async_handler("get_version")
 async def get_version() -> str:
-    """
-    Get the Home Assistant version
-    
-    Returns:
-        A string with the Home Assistant version (e.g., "2025.3.0")
-    """
+    """Get the Home Assistant version."""
     logger.info("Getting Home Assistant version")
     return await get_hass_version()
 
@@ -97,17 +92,14 @@ async def get_version() -> str:
 @async_handler("get_entity")
 async def get_entity(entity_id: str, fields: Optional[List[str]] = None, detailed: bool = False) -> dict:
     """
-    Get the state of a Home Assistant entity with optional field filtering
-    
+    Get the state of a Home Assistant entity with optional field filtering.
+
     Args:
-        entity_id: The entity ID to get (e.g. 'light.living_room')
-        fields: Optional list of fields to include (e.g. ['state', 'attr.brightness'])
-        detailed: If True, returns all entity fields without filtering
-                
-    Examples:
-        entity_id="light.living_room" - basic state check
-        entity_id="light.living_room", fields=["state", "attr.brightness"] - specific fields
-        entity_id="light.living_room", detailed=True - all details
+        entity_id: Entity ID (e.g. 'light.living_room')
+        fields: Fields to include (e.g. ['state', 'attr.brightness'])
+        detailed: If True, returns all fields unfiltered
+
+    Examples: get_entity("light.living_room", fields=["state", "attr.brightness"])
     """
     logger.info(f"Getting entity state: {entity_id}")
     if detailed:
@@ -124,26 +116,21 @@ async def get_entity(entity_id: str, fields: Optional[List[str]] = None, detaile
 @async_handler("entity_action")
 async def entity_action(entity_id: str, action: str, params: Optional[Dict[str, Any]] = None) -> dict:
     """
-    Perform an action on a Home Assistant entity (on, off, toggle)
-    
+    Perform an action on a Home Assistant entity (on, off, toggle).
+
     Args:
-        entity_id: The entity ID to control (e.g. 'light.living_room')
-        action: The action to perform ('on', 'off', 'toggle')
-        params: Optional dictionary of additional parameters for the service call
-    
-    Returns:
-        The response from Home Assistant
-    
-    Examples:
-        entity_id="light.living_room", action="on", params={"brightness": 255}
-        entity_id="switch.garden_lights", action="off"
-        entity_id="climate.living_room", action="on", params={"temperature": 22.5}
-    
-    Domain-Specific Parameters:
-        - Lights: brightness (0-255), color_temp, rgb_color, transition, effect
-        - Covers: position (0-100), tilt_position
-        - Climate: temperature, target_temp_high, target_temp_low, hvac_mode
-        - Media players: source, volume_level (0-1)
+        entity_id: Entity ID to control (e.g. 'light.living_room')
+        action: 'on', 'off', or 'toggle'
+        params: Additional service parameters (e.g. {"brightness": 255, "temperature": 22.5})
+
+    Domain-specific params:
+        Lights: brightness (0-255), color_temp, rgb_color, transition, effect
+        Covers: position (0-100), tilt_position
+        Climate: temperature, target_temp_high, target_temp_low, hvac_mode
+        Media players: source, volume_level (0-1)
+
+    Examples: entity_action("light.living_room", "on", {"brightness": 255})
+              entity_action("switch.garden_lights", "off")
     """
     if action not in ["on", "off", "toggle"]:
         return {"error": f"Invalid action: {action}. Valid actions are 'on', 'off', 'toggle'"}
@@ -171,35 +158,19 @@ async def list_entities(
     compact: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Get a list of Home Assistant entities with optional filtering
+    List Home Assistant entities with optional filtering.
 
     Args:
-        domain: Optional domain to filter by (e.g., 'light', 'switch', 'sensor')
-        search_query: Optional search term to filter entities by name, id, or attributes
-                     (Note: Does not support wildcards. To get all entities, leave this empty)
-        limit: Maximum number of entities to return (default: 100)
-        fields: Optional list of specific fields to include in each entity
-        detailed: If True, returns all entity fields without filtering
-        compact: If True, returns minimal output (entity_id, state, friendly_name only).
-                 Takes precedence over detailed and fields. Best for large result sets.
+        domain: Domain filter (e.g. 'light', 'switch', 'sensor')
+        search_query: Search by name, id, or attributes (no wildcards)
+        limit: Max entities to return (default: 100)
+        fields: Specific fields to include per entity
+        detailed: If True, returns all fields unfiltered
+        compact: If True, returns only entity_id/state/friendly_name (overrides detailed/fields)
 
-    Returns:
-        A list of entity dictionaries with lean formatting by default
-
-    Examples:
-        domain="light" - get all lights
-        search_query="kitchen", limit=20 - search entities
-        domain="sensor", detailed=True - full sensor details
-        compact=True - minimal output for token efficiency
-
-    Best Practices:
-        - Use compact=True when you need many entities but minimal detail
-        - Use lean format (default) for most operations
-        - Prefer domain filtering over no filtering
-        - For domain overviews, use domain_summary instead of list_entities
-        - Only request detailed=True when necessary for full attribute inspection
-        - To get all entity types/domains, use list_entities without a domain filter,
-          then extract domains from entity_ids
+    Examples: list_entities(domain="light")
+              list_entities(search_query="kitchen", limit=20)
+              list_entities(compact=True)
     """
     log_message = "Getting entities"
     if domain:
@@ -238,24 +209,14 @@ async def list_entities(
 @async_handler("search_entities")
 async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
     """
-    Search for entities matching a query string
-    
+    Search for entities matching a query string across IDs, names, and attributes.
+
     Args:
-        query: The search query to match against entity IDs, names, and attributes.
-              (Note: Does not support wildcards. To get all entities, leave this blank or use list_entities tool)
-        limit: Maximum number of results to return (default: 20)
-    
-    Returns:
-        A dictionary containing search results and metadata:
-        - count: Total number of matching entities found
-        - results: List of matching entities with essential information
-        - domains: Map of domains with counts (e.g. {"light": 3, "sensor": 2})
-        
-    Examples:
-        query="temperature" - find temperature entities
-        query="living room", limit=10 - find living room entities
-        query="", limit=500 - list all entity types
-        
+        query: Search term (no wildcards; empty string returns all entities)
+        limit: Max results (default: 20)
+
+    Examples: search_entities("temperature")
+              search_entities("living room", limit=10)
     """
     logger.info(f"Searching for entities matching: '{query}' with limit: {limit}")
     
@@ -325,24 +286,15 @@ async def search_entities(query: str, limit: int = 20) -> Dict[str, Any]:
 @async_handler("domain_summary")
 async def domain_summary(domain: str, example_limit: int = 3) -> Dict[str, Any]:
     """
-    Get a summary of entities in a specific domain
-    
+    Get a summary of entities in a domain (counts, state distribution, examples).
+
     Args:
-        domain: The domain to summarize (e.g., 'light', 'switch', 'sensor')
-        example_limit: Maximum number of examples to include for each state
-    
-    Returns:
-        A dictionary containing:
-        - total_count: Number of entities in the domain
-        - state_distribution: Count of entities in each state
-        - examples: Sample entities for each state
-        - common_attributes: Most frequently occurring attributes
-        
-    Examples:
-        domain="light" - get light summary
-        domain="climate", example_limit=5 - climate summary with more examples
-    Best Practices:
-        - Use this before retrieving all entities in a domain to understand what's available    """
+        domain: Domain to summarize (e.g. 'light', 'switch', 'sensor')
+        example_limit: Max examples per state (default: 3)
+
+    Examples: domain_summary("light")
+              domain_summary("climate", example_limit=5)
+    """
     logger.info(f"Getting domain summary for: {domain}")
     return await summarize_domain(domain, example_limit)
 
@@ -350,22 +302,9 @@ async def domain_summary(domain: str, example_limit: int = 3) -> Dict[str, Any]:
 @async_handler("system_overview")
 async def system_overview() -> Dict[str, Any]:
     """
-    Get a comprehensive overview of the entire Home Assistant system
-    
-    Returns:
-        A dictionary containing:
-        - total_entities: Total count of all entities
-        - domains: Dictionary of domains with their entity counts and state distributions
-        - domain_samples: Representative sample entities for each domain (2-3 per domain)
-        - domain_attributes: Common attributes for each domain
-        - area_distribution: Entities grouped by area (if available)
-        
-    Examples:
-        Returns domain counts, sample entities, and common attributes
-    Best Practices:
-        - Use this as the first call when exploring an unfamiliar Home Assistant instance
-        - Perfect for building context about the structure of the smart home
-        - After getting an overview, use domain_summary to dig deeper into specific domains
+    Get a comprehensive overview of the Home Assistant system (domain counts, samples, areas).
+
+    Good first call when exploring an unfamiliar instance. Use domain_summary to drill deeper.
     """
     logger.info("Generating complete system overview")
     return await get_system_overview()
@@ -376,25 +315,13 @@ async def system_overview() -> Dict[str, Any]:
 @async_handler("list_automations")
 async def list_automations(limit: int = DEFAULT_AUTOMATION_LIMIT) -> Dict[str, Any]:
     """
-    Get a list of all automations from Home Assistant with pagination
-
-    This function retrieves automations configured in Home Assistant,
-    including their IDs, entity IDs, state, and display names.
+    List automations with their IDs, entity IDs, state, and aliases.
 
     Args:
-        limit: Maximum number of automations to return (1-200, default: 50)
+        limit: Max automations to return (1-200, default: 50)
 
-    Returns:
-        A dictionary containing:
-        - automations: List of automation dictionaries (id, entity_id, state, alias)
-        - count: Number of automations returned
-        - total_available: Total automations before limiting
-        - truncated: Whether results were truncated
-
-    Examples:
-        limit=50 - get first 50 automations (default)
-        limit=200 - get up to 200 automations
-
+    Examples: list_automations()
+              list_automations(limit=200)
     """
     logger.info(f"Getting automations (limit: {limit})")
     try:
@@ -432,28 +359,17 @@ async def list_automation_traces(
     limit: int = 10
 ) -> Dict[str, Any]:
     """
-    List recent execution traces for a specific automation
+    List recent execution traces for a specific automation.
 
     Args:
-        automation_id: REQUIRED - The automation ID (e.g., 'motion_light' or 'automation.motion_light')
-        domain: Domain to query ('automation' or 'script'). Default: 'automation'
-        limit: Maximum traces to return (default: 10, max: 50)
+        automation_id: Automation ID (e.g. 'motion_light' or 'automation.motion_light')
+        domain: 'automation' or 'script' (default: 'automation')
+        limit: Max traces to return (default: 10, max: 50)
 
-    Returns:
-        Dictionary with:
-        - traces: List of lean summaries (run_id, timestamp, trigger, state, outcome)
-        - automation_id: The automation queried
-        - domain: The domain queried
-        - count: Number of traces returned
+    Use run_id from results with get_automation_trace for full details.
 
-    Examples:
-        automation_id="motion_light" - get last 10 traces
-        automation_id="kitchen_lights", limit=5 - get last 5 traces
-
-    Best Practices:
-        - Use run_id with get_automation_trace to get full details
-        - Check 'outcome' field: 'finished', 'failed_conditions', 'aborted'
-        - 'state: running' means automation still executing
+    Examples: list_automation_traces("motion_light")
+              list_automation_traces("kitchen_lights", limit=5)
     """
     logger.info(f"Listing traces for automation: {automation_id}, limit: {limit}")
     return await hass_list_automation_traces(automation_id, domain, limit)
@@ -467,37 +383,14 @@ async def get_automation_trace(
     domain: str = "automation"
 ) -> Dict[str, Any]:
     """
-    Get detailed trace for a specific automation run
-
-    Retrieves complete execution details including trigger info, condition
-    evaluation results, action execution steps, variables, and any errors.
+    Get detailed trace for a specific automation run (trigger, conditions, actions, errors).
 
     Args:
-        automation_id: The automation ID (e.g., 'motion_light' or 'automation.motion_light')
-        run_id: The specific run/trace ID from list_automation_traces
-        domain: Domain ('automation' or 'script'). Default: 'automation'
+        automation_id: Automation ID (e.g. 'motion_light')
+        run_id: Run/trace ID from list_automation_traces
+        domain: 'automation' or 'script' (default: 'automation')
 
-    Returns:
-        Dictionary with:
-        - trace: Complete trace data including:
-          * trigger: What triggered the automation
-          * condition: Condition evaluation results (if any)
-          * action: Step-by-step action execution
-          * variables: Variables at each step
-          * error: Error details if the run failed
-        - automation_id: The automation queried
-        - run_id: The run ID queried
-        - domain: The domain
-
-    Examples:
-        automation_id="motion_light", run_id="1700000000.123456"
-        automation_id="automation.bedtime_routine", run_id="1700000000.789"
-
-    Best Practices:
-        - First use list_automation_traces to find the run_id
-        - Check 'trace.trace' for step-by-step execution path
-        - Look for 'result' fields to see what each step returned
-        - Examine 'error' fields for failure details
+    Examples: get_automation_trace("motion_light", "1700000000.123456")
     """
     logger.info(f"Getting trace for automation: {automation_id}, run_id: {run_id}")
     return await hass_get_automation_trace(automation_id, run_id, domain)
@@ -506,14 +399,7 @@ async def get_automation_trace(
 @mcp.tool()
 @async_handler("restart_ha")
 async def restart_ha() -> Dict[str, Any]:
-    """
-    Restart Home Assistant
-    
-    ⚠️ WARNING: Temporarily disrupts all Home Assistant operations
-    
-    Returns:
-        Result of restart operation
-    """
+    """Restart Home Assistant. WARNING: Temporarily disrupts all operations."""
     logger.info("Restarting Home Assistant")
     return await restart_home_assistant()
 
@@ -521,21 +407,15 @@ async def restart_ha() -> Dict[str, Any]:
 @async_handler("call_service")
 async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Call any Home Assistant service (low-level API access)
-    
+    Call any Home Assistant service directly (low-level API).
+
     Args:
-        domain: The domain of the service (e.g., 'light', 'switch', 'automation')
-        service: The service to call (e.g., 'turn_on', 'turn_off', 'toggle')
-        data: Optional data to pass to the service (e.g., {'entity_id': 'light.living_room'})
-    
-    Returns:
-        The response from Home Assistant (usually empty for successful calls)
-    
-    Examples:
-        domain='light', service='turn_on', data={'entity_id': 'light.x', 'brightness': 255}
-        domain='automation', service='reload'
-        domain='fan', service='set_percentage', data={'entity_id': 'fan.x', 'percentage': 50}
-    
+        domain: Service domain (e.g. 'light', 'automation')
+        service: Service name (e.g. 'turn_on', 'reload')
+        data: Service data (e.g. {'entity_id': 'light.x', 'brightness': 255})
+
+    Examples: call_service("light", "turn_on", {"entity_id": "light.x", "brightness": 255})
+              call_service("automation", "reload")
     """
     logger.info(f"Calling Home Assistant service: {domain}.{service} with data: {sanitize_for_logging(data)}")
     return await hass_call_service(domain, service, data or {})
@@ -549,48 +429,19 @@ async def get_history(
     sample_strategy: str = "recent"
 ) -> Dict[str, Any]:
     """
-    Get state changes for an entity with automatic pagination
+    Get raw state changes for an entity. For aggregated trends, use get_statistics instead.
 
-    CONTEXT FLOODING PREVENTION:
-    - Results are LIMITED to prevent token overflow (default: 100 records)
-    - Use sample_strategy to control which records are returned
-    - For aggregated data, use get_statistics instead
-
-    When to use this tool:
-    - You need exact timestamps of state changes
-    - Entity changes infrequently (e.g., doors, switches)
-    - Short time periods relative to the sensor's update frequency
-
-    When NOT to use this tool:
-    - You only need trends or aggregated values → use get_statistics
-    - Long time periods for frequently-updating sensors
+    Best for: exact state change timestamps, infrequently-changing entities (doors, switches),
+    short time periods. NOT for: long ranges on frequently-updating sensors — use get_statistics.
 
     Args:
-        entity_id: The entity ID to get history for
-        hours: Number of hours of history to retrieve (default: 24)
-        limit: Maximum records to return (1-500, default: 100)
-        sample_strategy: How to sample if over limit:
-            - "recent" (default): Most recent records
-            - "first": Oldest records
-            - "even": Evenly spaced across time range
+        entity_id: Entity ID to get history for
+        hours: Hours of history (default: 24)
+        limit: Max records (1-500, default: 100)
+        sample_strategy: 'recent' (default), 'first', or 'even' — how to sample if over limit
 
-    Returns:
-        A dictionary containing:
-        - entity_id: The entity ID requested
-        - states: List of state objects with timestamps (possibly sampled)
-        - count: Number of states returned
-        - total_available: Total states before limiting
-        - truncated: Whether results were truncated
-        - sample_strategy: Strategy used for sampling
-        - first_changed: Timestamp of earliest state change
-        - last_changed: Timestamp of most recent state change
-        - note: Guidance message if truncated
-
-    Examples:
-        entity_id="binary_sensor.front_door" - door open/close events
-        entity_id="sensor.temperature", hours=1, limit=50 - limited temperature readings
-
-    Note: If truncated=True, consider using get_statistics for aggregated data.
+    Examples: get_history("binary_sensor.front_door")
+              get_history("sensor.temperature", hours=1, limit=50)
     """
     logger.info(f"Getting history for entity: {entity_id}, hours: {hours}, limit: {limit}")
 
@@ -668,53 +519,21 @@ async def get_history_range(
     sample_strategy: str = "recent"
 ) -> Dict[str, Any]:
     """
-    Get state changes for a specific date/time range with automatic pagination
+    Get raw state changes for a specific date/time range. For aggregated trends, use get_statistics_range.
 
-    CONTEXT FLOODING PREVENTION:
-    - Results are LIMITED to prevent token overflow (default: 100 records)
-    - Use sample_strategy to control which records are returned
-    - For aggregated data, use get_statistics_range instead
-
-    When to use this tool:
-    - You need exact timestamps of specific state changes
-    - Short, precise time windows
-    - Entities with infrequent state changes
-
-    When NOT to use this tool:
-    - Date ranges spanning days → use get_statistics_range
-    - Frequently-updating sensors → use get_statistics_range
-    - You only need aggregated values → use get_statistics_range
+    Best for: exact timestamps, short precise windows, infrequently-changing entities.
+    NOT for: multi-day ranges or frequently-updating sensors — use get_statistics_range.
 
     Args:
-        entity_id: The entity ID to get history for
-        start_time: Start time (ISO 8601, date only, or 'yesterday'/'today')
-        end_time: End time (optional, defaults to 'now')
+        entity_id: Entity ID to get history for
+        start_time: ISO 8601, date only, or 'yesterday'/'today'
+        end_time: End time (default: 'now')
         minimal_response: Reduce response size (default: true)
-        limit: Maximum records to return (1-500, default: 100)
-        sample_strategy: How to sample if over limit:
-            - "recent" (default): Most recent records
-            - "first": Oldest records
-            - "even": Evenly spaced across time range
+        limit: Max records (1-500, default: 100)
+        sample_strategy: 'recent' (default), 'first', or 'even' — how to sample if over limit
 
-    Returns:
-        A dictionary containing:
-        - entity_id: The entity ID requested
-        - states: List of state objects with timestamps (possibly sampled)
-        - count: Number of states returned
-        - total_available: Total states before limiting
-        - truncated: Whether results were truncated
-        - sample_strategy: Strategy used for sampling
-        - start_time: Actual start time used
-        - end_time: Actual end time used
-        - first_changed: Timestamp of earliest state change
-        - last_changed: Timestamp of most recent state change
-        - note: Guidance message if truncated
-
-    Examples:
-        entity_id="sensor.temperature", start_time="2025-10-28T10:00:00Z", end_time="2025-10-28T11:00:00Z"
-        entity_id="light.living_room", start_time="yesterday", end_time="today", limit=50
-
-    Note: If truncated=True, consider using get_statistics_range for aggregated data.
+    Examples: get_history_range("sensor.temp", "2025-10-28T10:00:00Z", "2025-10-28T11:00:00Z")
+              get_history_range("light.living_room", "yesterday", "today", limit=50)
     """
     logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}, limit: {limit}")
 
@@ -813,48 +632,17 @@ async def get_statistics(
     period: str = "hour"
 ) -> Dict[str, Any]:
     """
-    Get AGGREGATED statistics for an entity (mean, min, max values)
-
-    TOKEN EFFICIENT - Returns aggregated data instead of raw states
-    - Uses Home Assistant's pre-calculated statistics via WebSocket
-    - Much smaller response size than raw history
-    - Perfect for trends, graphs, and analysis
-
-    When to use this tool:
-    - You need trends or patterns over time
-    - Large time ranges (days, weeks, months)
-    - Frequently-updating sensors
-    - You don't need exact state change timestamps
-
-    Aggregation Periods:
-    - "5minute": Most detailed, ~12 points per hour
-    - "hour": Good for daily views, 24 points per day
-    - "day": For monthly views
-    - "week": For quarterly views
-    - "month": For yearly views
+    Get aggregated statistics (mean/min/max) for an entity. Token-efficient alternative to raw history.
 
     Args:
-        entity_id: The entity ID to get statistics for
-        hours: Number of hours of statistics to retrieve (default: 24)
-        period: Statistics period: "5minute", "hour", "day", "week", "month" (default: "hour")
+        entity_id: Entity ID to get statistics for
+        hours: Hours of data (default: 24)
+        period: Aggregation period (default: 'hour'):
+            '5minute' (~12 points/hr), 'hour' (24/day), 'day' (monthly views),
+            'week' (quarterly), 'month' (yearly). Match period to time range.
 
-    Returns:
-        A dictionary containing:
-        - entity_id: The entity ID requested
-        - period: The period used
-        - statistics: List of data points, each with:
-          * start: Timestamp (milliseconds)
-          * end: Timestamp (milliseconds)
-          * mean: Average value in period
-          * min: Minimum value in period
-          * max: Maximum value in period
-        - count: Number of statistical data points
-
-    Examples:
-        entity_id="sensor.temperature", hours=24, period="hour" - hourly averages for 24h
-        entity_id="sensor.power_usage", hours=168, period="day" - daily averages for 7 days
-
-    Note: Returns empty statistics if entity doesn't support long-term statistics
+    Examples: get_statistics("sensor.temperature", hours=24, period="hour")
+              get_statistics("sensor.power_usage", hours=168, period="day")
     """
     logger.info(f"Getting statistics for entity: {entity_id}, hours: {hours}, period: {period}")
 
@@ -896,53 +684,21 @@ async def get_statistics_range(
     period: str = "hour"
 ) -> Dict[str, Any]:
     """
-    Get AGGREGATED statistics for a specific date/time range
+    Get aggregated statistics (mean/min/max) for a date/time range. Best tool for historical data — no token limits.
 
-    BEST TOOL FOR HISTORICAL DATA - No token limits!
-    - Retrieves Home Assistant's long-term statistics via WebSocket
-    - Can handle ANY date range efficiently (days, months, years)
-    - Returns aggregated data (mean/min/max) instead of raw states
-
-    When to use this tool:
-    - ANY date range query (especially multi-day)
-    - Historical data analysis
-    - Frequently-updating sensors over long periods
-    - When raw history exceeds token limits
-
-    Aggregation Periods:
-    - "5minute": For detailed recent data (last 10 days)
-    - "hour": Best for daily/weekly ranges
-    - "day": Best for monthly ranges
-    - "week": Best for quarterly ranges
-    - "month": Best for yearly ranges
+    Handles any range efficiently (days, months, years). If get_history_range hits token limits,
+    use this tool with the same range instead.
 
     Args:
-        entity_id: The entity ID to get statistics for
-        start_time: Start time (ISO 8601, date only, or 'yesterday'/'today')
-        end_time: End time (optional, defaults to 'now')
-        period: Statistics period: "5minute", "hour", "day", "week", "month" (default: "hour")
+        entity_id: Entity ID to get statistics for
+        start_time: ISO 8601, date only, or 'yesterday'/'today'
+        end_time: End time (default: 'now')
+        period: Aggregation period (default: 'hour'):
+            '5minute' (~12 points/hr), 'hour' (24/day), 'day' (monthly views),
+            'week' (quarterly), 'month' (yearly). Match period to time range.
 
-    Returns:
-        A dictionary containing:
-        - entity_id: The entity ID requested
-        - period: The period used
-        - start_time: The actual start time used
-        - end_time: The actual end time used
-        - statistics: List of data points, each with:
-          * start: Timestamp (milliseconds)
-          * end: Timestamp (milliseconds)
-          * mean: Average value in period
-          * min: Minimum value in period
-          * max: Maximum value in period
-        - count: Number of statistical data points
-
-    Examples:
-        entity_id="sensor.temperature", start_time="2024-10-01", end_time="2024-10-31", period="day"
-        entity_id="sensor.power", start_time="2024-01-01", end_time="2024-12-31", period="month"
-        entity_id="sensor.humidity", start_time="yesterday", period="5minute"
-
-    Pro Tip: If get_history_range returns a token error, use this tool with
-    the same date range to get the aggregated data instead.
+    Examples: get_statistics_range("sensor.temperature", "2024-10-01", "2024-10-31", period="day")
+              get_statistics_range("sensor.humidity", "yesterday", period="5minute")
     """
     logger.info(f"Getting statistics range for entity: {entity_id}, start: {start_time}, end: {end_time}, period: {period}")
 
@@ -999,44 +755,17 @@ async def get_error_log(
     truncate_traces: bool = True
 ) -> Dict[str, Any]:
     """
-    Get the Home Assistant error log for troubleshooting using WebSocket API
-
-    CONTEXT FLOODING PREVENTION:
-    - Stacktraces are TRUNCATED to 3 lines by default (set truncate_traces=False for full traces)
-    - Results are LIMITED to prevent token overflow (default: 50 records)
-    - Use filters to narrow down results
+    Get the Home Assistant error log (WebSocket API). Stacktraces truncated by default.
 
     Args:
-        limit: Maximum number of records to return (1-100, default: 50)
-        integration: Filter by integration name (e.g., "mqtt", "zwave", "hue")
-        level: Filter by log level ("ERROR" or "WARNING")
-        since_minutes: Only return errors from the last N minutes
+        limit: Max records (1-100, default: 50)
+        integration: Filter by integration (e.g. "mqtt", "zwave")
+        level: Filter by level: "ERROR" or "WARNING"
+        since_minutes: Only errors from last N minutes
         truncate_traces: Truncate stacktraces to 3 lines (default: True)
 
-    Returns:
-        A dictionary containing:
-        - records: List of error/warning log records (potentially truncated)
-        - count: Number of records returned
-        - total_available: Total records before filtering/limiting
-        - truncated: Whether the result was truncated
-        - traces_truncated: Whether stacktraces were truncated
-        - filters_applied: Dict of filters that were applied
-        - error_count: Number of ERROR entries in returned records
-        - warning_count: Number of WARNING entries in returned records
-        - integration_mentions: Map of integration names to mention counts
-        - error: Error message if retrieval failed
-
-    Examples:
-        get_error_log() - default 50 recent errors with truncated traces
-        get_error_log(integration="mqtt") - only MQTT errors
-        get_error_log(level="ERROR", since_minutes=60) - only ERRORs from last hour
-        get_error_log(truncate_traces=False) - full stacktraces (may be large!)
-
-    Best Practices:
-        - Use integration filter for focused troubleshooting
-        - Use since_minutes to narrow to recent issues
-        - Only disable truncate_traces when you need full stacktrace details
-        - Check integration_mentions to identify problematic integrations
+    Examples: get_error_log(integration="mqtt")
+              get_error_log(level="ERROR", since_minutes=60)
     """
     logger.info(f"Getting Home Assistant error log (limit: {limit}, integration: {integration}, level: {level})")
     return await get_hass_error_log(
@@ -1060,46 +789,21 @@ async def get_core_logs(
     truncate_traces: bool = True
 ) -> Dict[str, Any]:
     """
-    Get Home Assistant core logs (DEBUG/INFO/WARNING/ERROR) from the journal
-
-    Fetches from the Supervisor journal API (HAOS/Supervised) with automatic
-    fallback to /api/error_log (Docker/Core installs).
-
-    CONTEXT FLOODING PREVENTION:
-    - Default 50 records (max 200)
-    - Stacktraces truncated to 3 lines by default
-    - Messages truncated to 500 chars
-    - Use filters to narrow results
+    Get Home Assistant core logs (all levels) from the Supervisor journal, with fallback to error log.
 
     Args:
-        limit: Maximum records to return (1-200, default: 50)
-        level: Filter by log level ("DEBUG", "INFO", "WARNING", "ERROR")
-        integration: Filter by integration name (e.g., "mqtt", "llmvision")
-        pattern: Case-insensitive substring match on message content
-        since_minutes: Only return logs from the last N minutes
-        lines: Lines to request from journal API (default: 500)
+        limit: Max records (1-200, default: 50)
+        level: Filter: "DEBUG", "INFO", "WARNING", or "ERROR"
+        integration: Filter by integration (e.g. "mqtt", "llmvision")
+        pattern: Case-insensitive substring match on message
+        since_minutes: Only logs from last N minutes
+        lines: Journal lines to request (default: 500)
         truncate_traces: Truncate stacktraces to 3 lines (default: True)
 
-    Returns:
-        Dictionary containing:
-        - records: List of log records (timestamp, level, logger, message, integration)
-        - count: Number of records returned
-        - total_parsed: Total records parsed before filtering
-        - source: "supervisor", "error_log", or "none"
-        - truncated: Whether results were truncated
-        - filters_applied: Dict of active filters
+    Use set_log_level to enable DEBUG before reading debug logs; reset to WARNING after.
 
-    Examples:
-        get_core_logs() - recent 50 log entries
-        get_core_logs(level="DEBUG", integration="llmvision") - debug logs for llmvision
-        get_core_logs(pattern="timeout", since_minutes=60) - timeout errors in last hour
-        get_core_logs(level="ERROR", limit=10) - last 10 errors
-
-    Best Practices:
-        - Use set_log_level to enable DEBUG first, then get_core_logs to read them
-        - Combine level + integration for focused debugging
-        - Use pattern for keyword search across all log levels
-        - Remember to reset log level to WARNING after debugging
+    Examples: get_core_logs(level="DEBUG", integration="llmvision")
+              get_core_logs(pattern="timeout", since_minutes=60)
     """
     logger.info(f"Getting core logs (limit: {limit}, level: {level}, integration: {integration})")
     return await get_hass_core_logs(
@@ -1121,33 +825,16 @@ async def set_log_level(
     custom_component: bool = False
 ) -> Dict[str, Any]:
     """
-    Set the log level for a Home Assistant integration
-
-    Calls the logger.set_level service to enable/disable debug logging.
+    Set the log level for a Home Assistant integration.
 
     Args:
-        integration: Integration name (e.g., "mqtt", "zwave", "llmvision")
-        level: Log level to set: "debug", "info", "warning", "error"
-        custom_component: If True, targets custom_components.X instead of homeassistant.components.X
+        integration: Integration name (e.g. "mqtt", "llmvision")
+        level: "debug", "info", "warning", or "error"
+        custom_component: If True, targets custom_components.X (for HACS integrations)
 
-    Returns:
-        Dictionary containing:
-        - success: Whether the level was set successfully
-        - integration: The integration name
-        - level: The level that was set
-        - logger_name: The full logger path that was configured
-        - error: Error message if failed
-
-    Examples:
-        set_log_level("llmvision", "debug", custom_component=True) - enable debug for llmvision
-        set_log_level("mqtt", "debug") - enable debug for MQTT
-        set_log_level("mqtt", "warning") - reset MQTT to normal logging
-
-    Best Practices:
-        - Enable debug: set_log_level("integration", "debug")
-        - Read logs: get_core_logs(integration="integration", level="DEBUG")
-        - Reset: set_log_level("integration", "warning")
-        - Use custom_component=True for HACS/custom integrations
+    Examples: set_log_level("mqtt", "debug")
+              set_log_level("llmvision", "debug", custom_component=True)
+              set_log_level("mqtt", "warning")  # reset to normal
     """
     logger.info(f"Setting log level for {integration} to {level}")
     return await set_hass_log_level(integration, level, custom_component)
@@ -1157,25 +844,17 @@ async def set_log_level(
 @async_handler("remove_entity")
 async def remove_entity(entity_id: str, confirm: bool = False) -> Dict[str, Any]:
     """
-    Remove an entity from the Home Assistant entity registry
+    Remove an entity from the entity registry. Two-phase safety: preview first, then confirm.
 
-    SAFETY: By default returns a preview of what would be deleted.
-    Set confirm=True to actually perform the removal.
-
-    The entity may reappear if its integration recreates it on restart.
-    Consider using update_entity with disabled_by="user" to disable instead.
+    By default returns a preview. Set confirm=True to actually delete.
+    Entity may reappear if integration recreates it; consider disable instead.
 
     Args:
-        entity_id: The entity ID to remove (e.g., 'light.old_device')
-        confirm: If False (default), returns preview with entity details.
-                 If True, permanently removes the entity registry entry.
+        entity_id: Entity ID to remove (e.g. 'light.old_device')
+        confirm: False=preview (default), True=permanently remove
 
-    Returns:
-        Preview dict (confirm=False) or success dict with removed entity details (confirm=True)
-
-    Examples:
-        entity_id="light.orphaned_device" - preview what would be deleted
-        entity_id="light.orphaned_device", confirm=True - actually delete
+    Examples: remove_entity("light.orphaned_device")         # preview
+              remove_entity("light.orphaned_device", confirm=True)  # delete
     """
     logger.info(f"Removing entity from registry: {entity_id} (confirm={confirm})")
     return await remove_registry_entity(entity_id, confirm=confirm)
@@ -1194,31 +873,23 @@ async def update_entity(
     options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Update properties of an entity in the Home Assistant entity registry
+    Update entity registry properties (name, icon, area, disable/enable, hide/unhide, rename).
 
-    Allows changing entity metadata such as friendly name, icon, area assignment,
-    disabling/enabling, hiding/unhiding, or renaming the entity ID.
+    For fields that can be cleared, pass "none" as the string value to set to null.
 
     Args:
-        entity_id: The entity ID to update (e.g., 'light.living_room')
-        name: Custom friendly name. Set to "none" to clear custom name
-        icon: Custom icon (e.g., 'mdi:lamp'). Set to "none" to clear custom icon
-        disabled_by: Set to "user" to disable, "none" to enable (re-enable a disabled entity)
-        hidden_by: Set to "user" to hide from UI, "none" to unhide
-        area_id: Assign entity to an area by area ID. Set to "none" to remove area
-        new_entity_id: Rename the entity ID itself (e.g., 'light.new_name')
-        options: Entity platform options dictionary
+        entity_id: Entity ID to update
+        name: Friendly name (or "none" to clear)
+        icon: Icon (e.g. 'mdi:lamp', or "none" to clear)
+        disabled_by: "user" to disable, "none" to re-enable
+        hidden_by: "user" to hide, "none" to unhide
+        area_id: Area ID (or "none" to remove)
+        new_entity_id: Rename entity ID (e.g. 'light.new_name')
+        options: Platform options dict
 
-    Returns:
-        Dictionary with success status and updated entity entry, or error
-
-    Examples:
-        entity_id="light.living_room", name="Living Room Lamp" - rename
-        entity_id="sensor.old", disabled_by="user" - disable entity
-        entity_id="sensor.old", disabled_by="none" - re-enable disabled entity
-        entity_id="light.test", new_entity_id="light.bedroom" - change entity ID
-        entity_id="switch.plug", area_id="kitchen" - assign to area
-        entity_id="switch.plug", hidden_by="none" - unhide entity
+    Examples: update_entity("sensor.old", disabled_by="user")
+              update_entity("sensor.old", disabled_by="none")  # re-enable
+              update_entity("light.x", name="Living Room Lamp", area_id="kitchen")
     """
     logger.info(f"Updating entity in registry: {entity_id}")
 
@@ -1248,20 +919,12 @@ async def update_entity(
 @async_handler("get_entity_registry")
 async def get_entity_registry(entity_id: str) -> Dict[str, Any]:
     """
-    Get detailed registry entry for a single entity
-
-    Returns the full entity registry entry including platform, config entry,
-    device info, disabled/hidden status, area assignment, and more.
+    Get the full entity registry entry (platform, config, device, disabled/hidden, area).
 
     Args:
-        entity_id: The entity ID to look up (e.g., 'light.living_room')
+        entity_id: Entity ID to look up (e.g. 'light.living_room')
 
-    Returns:
-        The full entity registry entry, or error
-
-    Examples:
-        entity_id="light.living_room" - get registry details
-        entity_id="sensor.temperature" - check platform and device info
+    Examples: get_entity_registry("light.living_room")
     """
     logger.info(f"Getting entity registry entry: {entity_id}")
     return await hass_get_registry_entity(entity_id)
@@ -1274,27 +937,14 @@ async def list_entity_registry(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    List all entity registry entries with optional domain filter
-
-    Returns registry entries (not states) including platform, config entry,
-    disabled/hidden status, and area assignments. Useful for auditing entities,
-    finding orphaned entries, or bulk management.
+    List entity registry entries (platform, config, disabled/hidden, area). Not states — use list_entities for states.
 
     Args:
-        domain: Optional domain filter (e.g., 'light', 'sensor')
-        limit: Maximum number of entities to return (default: 100, max: 5000)
+        domain: Domain filter (e.g. 'light', 'sensor')
+        limit: Max entries (default: 100, max: 5000)
 
-    Returns:
-        Dictionary containing:
-        - entities: List of registry entries
-        - count: Number returned
-        - total_available: Total matching entries
-        - truncated: Whether results were limited
-
-    Examples:
-        domain="light" - list all light registry entries
-        limit=500 - get more entries
-        domain="sensor", limit=50 - sensor entries with limit
+    Examples: list_entity_registry(domain="light")
+              list_entity_registry(domain="sensor", limit=50)
     """
     logger.info(f"Listing entity registry (domain={domain}, limit={limit})")
     return await list_registry_entities(limit=limit, domain=domain)
@@ -1310,52 +960,22 @@ async def query_entities(
     compact: bool = False
 ) -> Dict[str, Any]:
     """
-    Query entities using CEL (Common Expression Language) expressions
+    Query entities using CEL (Common Expression Language) expressions.
 
-    Fetches all entity states from Home Assistant and filters them
-    client-side using CEL expressions. Supports proper numeric comparison,
-    OR/AND/NOT logic, and nested attribute access.
+    CEL context: entity_id (string), state (numeric if possible, else string),
+    domain (string), attributes (dict).
 
     Args:
-        domain: Optional domain pre-filter (e.g., "sensor", "light", "cover")
-        expression: CEL expression for filtering entities
-        limit: Maximum entities to return (default: 50)
-        lean: Return minimal fields per entity with domain-specific attributes (default: True)
-        compact: Return only entity_id, state, friendly_name (default: False)
+        domain: Domain pre-filter (e.g. "sensor", "light")
+        expression: CEL filter expression
+        limit: Max entities (default: 50)
+        lean: Minimal fields with domain-specific attrs (default: True)
+        compact: Only entity_id/state/friendly_name (default: False)
 
-    CEL Expression Examples:
-        Low battery sensors:
-            domain="sensor", expression='state < 30 && attributes.device_class == "battery"'
-
-        Lights that are on:
-            domain="light", expression='state == "on"'
-
-        Unavailable OR unknown entities:
-            expression='state == "unavailable" || state == "unknown"'
-
-        NOT closed covers:
-            domain="cover", expression='state != "closed"'
-
-        Temperature sensors above 80 OR below 32:
-            domain="sensor",
-            expression='attributes.device_class == "temperature" && (state > 80 || state < 32)'
-
-        Lights on and dim:
-            domain="light", expression='state == "on" && attributes.brightness < 50'
-
-    CEL Context Per Entity:
-        - entity_id: string (e.g., "sensor.battery_level")
-        - state: numeric if possible, otherwise string
-        - domain: string (e.g., "sensor")
-        - attributes: dict with all entity attributes
-
-    Returns:
-        Dictionary containing:
-        - count: Number of entities returned
-        - total_matched: Total entities matching (before limit)
-        - truncated: Whether results were limited
-        - entities: List of matching entities
-        - error: Error message if expression is invalid or API fails
+    CEL examples:
+        domain="sensor", expression='state < 30 && attributes.device_class == "battery"'
+        domain="light", expression='state == "on" && attributes.brightness < 50'
+        expression='state == "unavailable" || state == "unknown"'
     """
     logger.info(f"Querying entities with domain={domain}, expression={expression}")
 
