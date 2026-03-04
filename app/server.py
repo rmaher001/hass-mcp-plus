@@ -19,6 +19,7 @@ from app.hass import (
     get_automations, restart_home_assistant,
     cleanup_client, filter_fields, summarize_domain, get_system_overview,
     get_hass_error_log, get_entity_history, get_entity_history_range,
+    get_entity_statistics, get_entity_statistics_range,
     list_automation_traces as hass_list_automation_traces,
     get_automation_trace as hass_get_automation_trace,
     sanitize_for_logging,
@@ -425,47 +426,68 @@ async def call_service(domain: str, service: str, data: Optional[Dict[str, Any]]
 async def get_history(
     entity_id: str,
     hours: int = 24,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
     limit: int = DEFAULT_HISTORY_LIMIT,
-    sample_strategy: str = "recent"
+    sample_strategy: str = "recent",
+    minimal_response: bool = True,
 ) -> Dict[str, Any]:
     """
     Get raw state changes for an entity. For aggregated trends, use get_statistics instead.
 
+    By default returns last N hours. Provide start_time to query a specific date range instead.
     Best for: exact state change timestamps, infrequently-changing entities (doors, switches),
     short time periods. NOT for: long ranges on frequently-updating sensors — use get_statistics.
 
     Args:
         entity_id: Entity ID to get history for
-        hours: Hours of history (default: 24)
+        hours: Hours of history (default: 24). Ignored if start_time is provided.
+        start_time: ISO 8601, date only, or 'yesterday'/'today'. If set, uses range mode instead of hours.
+        end_time: End of range (default: 'now'). Only used with start_time.
         limit: Max records (1-500, default: 100)
         sample_strategy: 'recent' (default), 'first', or 'even' — how to sample if over limit
+        minimal_response: Reduce response size in range mode (default: true)
 
     Examples: get_history("binary_sensor.front_door")
               get_history("sensor.temperature", hours=1, limit=50)
+              get_history("sensor.temp", start_time="2025-10-28T10:00:00Z", end_time="2025-10-28T11:00:00Z")
+              get_history("light.living_room", start_time="yesterday", end_time="today")
     """
-    logger.info(f"Getting history for entity: {entity_id}, hours: {hours}, limit: {limit}")
+    range_mode = start_time is not None
+    if range_mode:
+        logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}, limit: {limit}")
+    else:
+        logger.info(f"Getting history for entity: {entity_id}, hours: {hours}, limit: {limit}")
 
     try:
-        # Call the updated hass function (now returns dict with metadata)
-        result = await get_entity_history(entity_id, hours, limit, sample_strategy)
+        if range_mode:
+            result = await get_entity_history_range(
+                entity_id, start_time, end_time, minimal_response, limit, sample_strategy
+            )
+        else:
+            result = await get_entity_history(entity_id, hours, limit, sample_strategy)
 
         # Check for errors from the API call
         if isinstance(result, dict) and "error" in result:
-            return {
+            error_response = {
                 "entity_id": entity_id,
                 "error": result["error"],
                 "states": [],
                 "count": 0,
                 "total_available": 0,
                 "truncated": False,
-                "sample_strategy": sample_strategy
+                "sample_strategy": sample_strategy,
             }
+            if range_mode:
+                error_response["start_time"] = start_time
+                error_response["end_time"] = end_time or "now"
+            return error_response
 
-        # The hass function now returns structured data
+        # The hass function returns structured data
         states = result.get("states", [])
 
         if not states:
-            return {
+            empty_response = {
                 "entity_id": entity_id,
                 "states": [],
                 "count": 0,
@@ -474,12 +496,16 @@ async def get_history(
                 "sample_strategy": sample_strategy,
                 "first_changed": None,
                 "last_changed": None,
-                "note": "No state changes found in the specified timeframe."
+                "note": "No state changes found in the specified range" if range_mode else "No state changes found in the specified timeframe.",
             }
+            if range_mode:
+                empty_response["start_time"] = result.get("start_time", start_time)
+                empty_response["end_time"] = result.get("end_time", end_time or "now")
+            return empty_response
 
         # Extract first and last changed timestamps
-        first_changed = states[0].get("last_changed") if states else None
-        last_changed = states[-1].get("last_changed") if states else None
+        first_changed = states[0].get("last_changed")
+        last_changed = states[-1].get("last_changed")
 
         response = {
             "entity_id": entity_id,
@@ -489,115 +515,18 @@ async def get_history(
             "truncated": result.get("truncated", False),
             "sample_strategy": result.get("sample_strategy", sample_strategy),
             "first_changed": first_changed,
-            "last_changed": last_changed
+            "last_changed": last_changed,
         }
 
-        if result.get("note"):
-            response["note"] = result["note"]
-
-        return response
-    except Exception as e:
-        logger.error(f"Error processing history for {entity_id}: {str(e)}")
-        return {
-            "entity_id": entity_id,
-            "error": "Error processing history",
-            "states": [],
-            "count": 0,
-            "total_available": 0,
-            "truncated": False,
-            "sample_strategy": sample_strategy
-        }
-
-@mcp.tool()
-@async_handler("get_history_range")
-async def get_history_range(
-    entity_id: str,
-    start_time: str,
-    end_time: Optional[str] = None,
-    minimal_response: bool = True,
-    limit: int = DEFAULT_HISTORY_LIMIT,
-    sample_strategy: str = "recent"
-) -> Dict[str, Any]:
-    """
-    Get raw state changes for a specific date/time range. For aggregated trends, use get_statistics_range.
-
-    Best for: exact timestamps, short precise windows, infrequently-changing entities.
-    NOT for: multi-day ranges or frequently-updating sensors — use get_statistics_range.
-
-    Args:
-        entity_id: Entity ID to get history for
-        start_time: ISO 8601, date only, or 'yesterday'/'today'
-        end_time: End time (default: 'now')
-        minimal_response: Reduce response size (default: true)
-        limit: Max records (1-500, default: 100)
-        sample_strategy: 'recent' (default), 'first', or 'even' — how to sample if over limit
-
-    Examples: get_history_range("sensor.temp", "2025-10-28T10:00:00Z", "2025-10-28T11:00:00Z")
-              get_history_range("light.living_room", "yesterday", "today", limit=50)
-    """
-    logger.info(f"Getting history range for entity: {entity_id}, start: {start_time}, end: {end_time}, limit: {limit}")
-
-    try:
-        # Get history using the updated range function (now returns dict with metadata)
-        result = await get_entity_history_range(
-            entity_id, start_time, end_time, minimal_response, limit, sample_strategy
-        )
-
-        # Check for errors from the API call
-        if isinstance(result, dict) and "error" in result:
-            return {
-                "entity_id": entity_id,
-                "error": result["error"],
-                "states": [],
-                "count": 0,
-                "total_available": 0,
-                "truncated": False,
-                "sample_strategy": sample_strategy,
-                "start_time": start_time,
-                "end_time": end_time or "now"
-            }
-
-        # The hass function now returns structured data
-        states = result.get("states", [])
-
-        if not states:
-            return {
-                "entity_id": entity_id,
-                "states": [],
-                "count": 0,
-                "total_available": result.get("total_available", 0),
-                "truncated": False,
-                "sample_strategy": sample_strategy,
-                "start_time": result.get("start_time", start_time),
-                "end_time": result.get("end_time", end_time or "now"),
-                "first_changed": None,
-                "last_changed": None,
-                "note": "No state changes found in the specified range"
-            }
-
-        # Extract first and last changed timestamps
-        first_changed = states[0].get("last_changed") if states else None
-        last_changed = states[-1].get("last_changed") if states else None
-
-        response = {
-            "entity_id": entity_id,
-            "states": states,
-            "count": result.get("count", len(states)),
-            "total_available": result.get("total_available", len(states)),
-            "truncated": result.get("truncated", False),
-            "sample_strategy": result.get("sample_strategy", sample_strategy),
-            "start_time": result.get("start_time", start_time),
-            "end_time": result.get("end_time", end_time or "now"),
-            "first_changed": first_changed,
-            "last_changed": last_changed
-        }
+        if range_mode:
+            response["start_time"] = result.get("start_time", start_time)
+            response["end_time"] = result.get("end_time", end_time or "now")
 
         if result.get("note"):
             response["note"] = result["note"]
 
         return response
     except ValueError as e:
-        # Handle date parsing errors
         logger.error(f"Date parsing error for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
@@ -608,11 +537,11 @@ async def get_history_range(
             "truncated": False,
             "sample_strategy": sample_strategy,
             "start_time": start_time,
-            "end_time": end_time or "now"
+            "end_time": end_time or "now",
         }
     except Exception as e:
-        logger.error(f"Error processing history range for {entity_id}: {str(e)}")
-        return {
+        logger.error(f"Error processing history for {entity_id}: {str(e)}")
+        error_response = {
             "entity_id": entity_id,
             "error": "Error processing history",
             "states": [],
@@ -620,37 +549,53 @@ async def get_history_range(
             "total_available": 0,
             "truncated": False,
             "sample_strategy": sample_strategy,
-            "start_time": start_time,
-            "end_time": end_time or "now"
         }
+        if range_mode:
+            error_response["start_time"] = start_time
+            error_response["end_time"] = end_time or "now"
+        return error_response
 
 @mcp.tool()
 @async_handler("get_statistics")
 async def get_statistics(
     entity_id: str,
     hours: int = 24,
-    period: str = "hour"
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    period: str = "hour",
 ) -> Dict[str, Any]:
     """
-    Get aggregated statistics (mean/min/max) for an entity. Token-efficient alternative to raw history.
+    Get aggregated statistics (mean/min/max) for an entity. Best tool for historical data — no token limits.
+
+    By default returns last N hours. Provide start_time to query a specific date range instead.
+    Handles any range efficiently (days, months, years). If get_history hits token limits,
+    use this tool with the same time range instead.
 
     Args:
         entity_id: Entity ID to get statistics for
-        hours: Hours of data (default: 24)
+        hours: Hours of data (default: 24). Ignored if start_time is provided.
+        start_time: ISO 8601, date only, or 'yesterday'/'today'. If set, uses range mode instead of hours.
+        end_time: End of range (default: 'now'). Only used with start_time.
         period: Aggregation period (default: 'hour'):
             '5minute' (~12 points/hr), 'hour' (24/day), 'day' (monthly views),
             'week' (quarterly), 'month' (yearly). Match period to time range.
 
     Examples: get_statistics("sensor.temperature", hours=24, period="hour")
               get_statistics("sensor.power_usage", hours=168, period="day")
+              get_statistics("sensor.temperature", start_time="2024-10-01", end_time="2024-10-31", period="day")
+              get_statistics("sensor.humidity", start_time="yesterday", period="5minute")
     """
-    logger.info(f"Getting statistics for entity: {entity_id}, hours: {hours}, period: {period}")
+    range_mode = start_time is not None
+    if range_mode:
+        logger.info(f"Getting statistics range for entity: {entity_id}, start: {start_time}, end: {end_time}, period: {period}")
+    else:
+        logger.info(f"Getting statistics for entity: {entity_id}, hours: {hours}, period: {period}")
 
     try:
-        from app.hass import get_entity_statistics
-
-        # Get statistics using the API function
-        stats_data = await get_entity_statistics(entity_id, hours, period)
+        if range_mode:
+            stats_data = await get_entity_statistics_range(entity_id, start_time, end_time, period)
+        else:
+            stats_data = await get_entity_statistics(entity_id, hours, period)
 
         # Check for errors from the API call
         if isinstance(stats_data, dict) and "error" in stats_data:
@@ -659,72 +604,21 @@ async def get_statistics(
         # Extract statistics count
         stats_list = stats_data.get("statistics", [])
 
-        return {
+        response = {
             "entity_id": entity_id,
             "period": period,
-            "hours_requested": hours,
             "statistics": stats_list,
-            "count": len(stats_list)
-        }
-    except Exception as e:
-        logger.error(f"Error getting statistics for {entity_id}: {str(e)}")
-        return {
-            "entity_id": entity_id,
-            "error": "Error retrieving statistics",
-            "statistics": [],
-            "count": 0
+            "count": len(stats_list),
         }
 
-@mcp.tool()
-@async_handler("get_statistics_range")
-async def get_statistics_range(
-    entity_id: str,
-    start_time: str,
-    end_time: Optional[str] = None,
-    period: str = "hour"
-) -> Dict[str, Any]:
-    """
-    Get aggregated statistics (mean/min/max) for a date/time range. Best tool for historical data — no token limits.
+        if range_mode:
+            response["start_time"] = stats_data.get("start_time", start_time)
+            response["end_time"] = stats_data.get("end_time", end_time or "now")
+        else:
+            response["hours_requested"] = hours
 
-    Handles any range efficiently (days, months, years). If get_history_range hits token limits,
-    use this tool with the same range instead.
-
-    Args:
-        entity_id: Entity ID to get statistics for
-        start_time: ISO 8601, date only, or 'yesterday'/'today'
-        end_time: End time (default: 'now')
-        period: Aggregation period (default: 'hour'):
-            '5minute' (~12 points/hr), 'hour' (24/day), 'day' (monthly views),
-            'week' (quarterly), 'month' (yearly). Match period to time range.
-
-    Examples: get_statistics_range("sensor.temperature", "2024-10-01", "2024-10-31", period="day")
-              get_statistics_range("sensor.humidity", "yesterday", period="5minute")
-    """
-    logger.info(f"Getting statistics range for entity: {entity_id}, start: {start_time}, end: {end_time}, period: {period}")
-
-    try:
-        from app.hass import get_entity_statistics_range
-
-        # Get statistics using the API function
-        stats_data = await get_entity_statistics_range(entity_id, start_time, end_time, period)
-
-        # Check for errors from the API call
-        if isinstance(stats_data, dict) and "error" in stats_data:
-            return stats_data
-
-        # Extract statistics count
-        stats_list = stats_data.get("statistics", [])
-
-        return {
-            "entity_id": entity_id,
-            "period": period,
-            "start_time": stats_data.get("start_time", start_time),
-            "end_time": stats_data.get("end_time", end_time or "now"),
-            "statistics": stats_list,
-            "count": len(stats_list)
-        }
+        return response
     except ValueError as e:
-        # Handle date parsing errors
         logger.error(f"Date parsing error for {entity_id}: {str(e)}")
         return {
             "entity_id": entity_id,
@@ -732,18 +626,20 @@ async def get_statistics_range(
             "statistics": [],
             "count": 0,
             "start_time": start_time,
-            "end_time": end_time or "now"
+            "end_time": end_time or "now",
         }
     except Exception as e:
-        logger.error(f"Error getting statistics range for {entity_id}: {str(e)}")
-        return {
+        logger.error(f"Error getting statistics for {entity_id}: {str(e)}")
+        error_response = {
             "entity_id": entity_id,
             "error": "Error retrieving statistics",
             "statistics": [],
             "count": 0,
-            "start_time": start_time,
-            "end_time": end_time or "now"
         }
+        if range_mode:
+            error_response["start_time"] = start_time
+            error_response["end_time"] = end_time or "now"
+        return error_response
 
 @mcp.tool()
 @async_handler("get_error_log")

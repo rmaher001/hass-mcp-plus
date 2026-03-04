@@ -67,9 +67,7 @@ class TestMCPServer:
             "get_core_logs",
             "set_log_level",
             "get_history",
-            "get_history_range",
             "get_statistics",
-            "get_statistics_range",
             "query_entities",
             "remove_entity",
             "update_entity",
@@ -155,9 +153,7 @@ class TestMCPServer:
             "get_core_logs",
             "set_log_level",
             "get_history",
-            "get_history_range",
             "get_statistics",
-            "get_statistics_range",
             "query_entities",
             "remove_entity",
             "update_entity",
@@ -594,3 +590,175 @@ class TestMCPServer:
 
             assert result["count"] == 1
             assert result["entities"][0]["entity_id"] == "light.a"
+
+    # --- Unified get_history tests ---
+
+    @pytest.mark.asyncio
+    async def test_get_history_hours_mode(self):
+        """Test get_history with hours param (default mode, no start_time)."""
+        from app.server import get_history
+
+        mock_result = {
+            "states": [
+                {"state": "on", "last_changed": "2025-01-01T00:00:00Z"},
+                {"state": "off", "last_changed": "2025-01-01T01:00:00Z"},
+            ],
+            "count": 2,
+            "total_available": 2,
+            "truncated": False,
+            "sample_strategy": "recent",
+        }
+
+        with patch("app.server.get_entity_history", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_history(entity_id="sensor.temp", hours=12, limit=50)
+
+            mock_fn.assert_called_once_with("sensor.temp", 12, 50, "recent")
+            assert result["count"] == 2
+            assert result["first_changed"] == "2025-01-01T00:00:00Z"
+            assert result["last_changed"] == "2025-01-01T01:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_get_history_range_mode(self):
+        """Test get_history with start_time triggers range mode."""
+        from app.server import get_history
+
+        mock_result = {
+            "states": [
+                {"state": "22.5", "last_changed": "2025-01-01T10:00:00Z"},
+            ],
+            "count": 1,
+            "total_available": 1,
+            "truncated": False,
+            "sample_strategy": "recent",
+            "start_time": "2025-01-01T10:00:00Z",
+            "end_time": "2025-01-01T11:00:00Z",
+        }
+
+        with patch("app.server.get_entity_history_range", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_history(
+                entity_id="sensor.temp",
+                start_time="2025-01-01T10:00:00Z",
+                end_time="2025-01-01T11:00:00Z",
+                limit=50,
+                minimal_response=False,
+            )
+
+            mock_fn.assert_called_once_with(
+                "sensor.temp", "2025-01-01T10:00:00Z", "2025-01-01T11:00:00Z", False, 50, "recent"
+            )
+            assert result["count"] == 1
+            assert result["start_time"] == "2025-01-01T10:00:00Z"
+            assert result["end_time"] == "2025-01-01T11:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_get_history_range_mode_no_end_time(self):
+        """Test get_history with start_time but no end_time (defaults to None -> now)."""
+        from app.server import get_history
+
+        mock_result = {
+            "states": [{"state": "on", "last_changed": "2025-01-01T00:00:00Z"}],
+            "count": 1,
+            "total_available": 1,
+            "truncated": False,
+            "sample_strategy": "recent",
+            "start_time": "yesterday",
+            "end_time": "now",
+        }
+
+        with patch("app.server.get_entity_history_range", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_history(entity_id="light.test", start_time="yesterday")
+
+            mock_fn.assert_called_once_with(
+                "light.test", "yesterday", None, True, 100, "recent"
+            )
+            assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_history_range_mode_invalid_date(self):
+        """Test get_history with invalid start_time returns date error."""
+        from app.server import get_history
+
+        with patch("app.server.get_entity_history_range", new_callable=AsyncMock, side_effect=ValueError("Invalid date")):
+            result = await get_history(entity_id="sensor.temp", start_time="not-a-date")
+
+            assert "error" in result
+            assert "date" in result["error"].lower() or "time" in result["error"].lower()
+            assert result["states"] == []
+
+    # --- Unified get_statistics tests ---
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_hours_mode(self):
+        """Test get_statistics with hours param (default mode)."""
+        from app.server import get_statistics
+
+        mock_result = {
+            "statistics": [
+                {"start": "2025-01-01T00:00:00Z", "mean": 22.5, "min": 20.0, "max": 25.0},
+            ],
+        }
+
+        with patch("app.server.get_entity_statistics", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_statistics(entity_id="sensor.temp", hours=48, period="day")
+
+            mock_fn.assert_called_once_with("sensor.temp", 48, "day")
+            assert result["count"] == 1
+            assert result["hours_requested"] == 48
+            assert result["period"] == "day"
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_range_mode(self):
+        """Test get_statistics with start_time triggers range mode."""
+        from app.server import get_statistics
+
+        mock_result = {
+            "statistics": [
+                {"start": "2024-10-01T00:00:00Z", "mean": 21.0, "min": 18.0, "max": 24.0},
+                {"start": "2024-10-02T00:00:00Z", "mean": 22.0, "min": 19.0, "max": 25.0},
+            ],
+            "start_time": "2024-10-01",
+            "end_time": "2024-10-31",
+        }
+
+        with patch("app.server.get_entity_statistics_range", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_statistics(
+                entity_id="sensor.temp",
+                start_time="2024-10-01",
+                end_time="2024-10-31",
+                period="day",
+            )
+
+            mock_fn.assert_called_once_with("sensor.temp", "2024-10-01", "2024-10-31", "day")
+            assert result["count"] == 2
+            assert result["start_time"] == "2024-10-01"
+            assert result["end_time"] == "2024-10-31"
+            assert result["period"] == "day"
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_range_mode_no_end_time(self):
+        """Test get_statistics with start_time but no end_time."""
+        from app.server import get_statistics
+
+        mock_result = {
+            "statistics": [{"start": "2025-01-01T00:00:00Z", "mean": 50.0}],
+            "start_time": "yesterday",
+            "end_time": "now",
+        }
+
+        with patch("app.server.get_entity_statistics_range", new_callable=AsyncMock, return_value=mock_result) as mock_fn:
+            result = await get_statistics(entity_id="sensor.humidity", start_time="yesterday", period="5minute")
+
+            mock_fn.assert_called_once_with("sensor.humidity", "yesterday", None, "5minute")
+            assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_statistics_range_mode_invalid_date(self):
+        """Test get_statistics with invalid start_time returns date error."""
+        from app.server import get_statistics
+
+        with patch("app.server.get_entity_statistics_range", new_callable=AsyncMock, side_effect=ValueError("Invalid date")):
+            result = await get_statistics(entity_id="sensor.temp", start_time="garbage-date")
+
+            assert "error" in result
+            assert "date" in result["error"].lower() or "time" in result["error"].lower()
+            assert result["statistics"] == []
